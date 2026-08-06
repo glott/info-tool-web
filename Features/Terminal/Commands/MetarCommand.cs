@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using ZoaReference.Features.Terminal.Services;
 
@@ -159,12 +161,14 @@ public class MetarCommand(IHttpClientFactory httpClientFactory) : ITerminalComma
 
     private static string FormatWind(MetarObservation obs)
     {
-        if (obs.WindDirection is null || obs.WindSpeed is null || obs.WindSpeed == 0)
+        if (string.IsNullOrEmpty(obs.WindDirection) || obs.WindSpeed is null || obs.WindSpeed == 0)
         {
             return "Calm";
         }
         var gust = obs.WindGust.HasValue ? $"G{obs.WindGust.Value}" : "";
-        return $"{obs.WindDirection:D3}{obs.WindSpeed:D2}{gust}KT";
+        // wdir is a number normally, "VRB" for variable winds
+        var dir = int.TryParse(obs.WindDirection, out var deg) ? $"{deg:D3}" : obs.WindDirection;
+        return $"{dir}{obs.WindSpeed:D2}{gust}KT";
     }
 
     private static string NormalizeStation(string station)
@@ -207,7 +211,8 @@ public class MetarCommand(IHttpClientFactory httpClientFactory) : ITerminalComma
         public double? Dewpoint { get; set; }
 
         [JsonPropertyName("wdir")]
-        public int? WindDirection { get; set; }
+        [JsonConverter(typeof(StringOrNumberConverter))]
+        public string? WindDirection { get; set; }
 
         [JsonPropertyName("wspd")]
         public int? WindSpeed { get; set; }
@@ -216,6 +221,7 @@ public class MetarCommand(IHttpClientFactory httpClientFactory) : ITerminalComma
         public int? WindGust { get; set; }
 
         [JsonPropertyName("visib")]
+        [JsonConverter(typeof(StringOrNumberConverter))]
         public string? Visibility { get; set; }
 
         [JsonPropertyName("altim")]
@@ -238,5 +244,33 @@ public class MetarCommand(IHttpClientFactory httpClientFactory) : ITerminalComma
 
         [JsonPropertyName("base")]
         public int? Base { get; set; }
+    }
+
+    // aviationweather.gov mixes types on some fields: wdir is a number or "VRB",
+    // visib is a number or a string like "10+"
+    private sealed class StringOrNumberConverter : JsonConverter<string?>
+    {
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            reader.TokenType switch
+            {
+                JsonTokenType.String => reader.GetString(),
+                JsonTokenType.Number => reader.TryGetInt64(out var l)
+                    ? l.ToString(CultureInfo.InvariantCulture)
+                    : reader.GetDouble().ToString(CultureInfo.InvariantCulture),
+                JsonTokenType.Null => null,
+                _ => throw new JsonException($"Unexpected token {reader.TokenType} for string-or-number field")
+            };
+
+        public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options)
+        {
+            if (value is null)
+            {
+                writer.WriteNullValue();
+            }
+            else
+            {
+                writer.WriteStringValue(value);
+            }
+        }
     }
 }
