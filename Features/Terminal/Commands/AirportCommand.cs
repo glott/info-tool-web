@@ -36,12 +36,16 @@ public class AirportCommand(AirportRepository airportRepository) : ITerminalComm
             return Task.FromResult(FormatAirports([kExact], query));
         }
 
-        // Search by IATA, local ID, or name
+        // Search by IATA, local ID, or name — code matches sort first so a
+        // valid code is never crowded out by name-substring hits.
+        bool MatchCode(IcaoReference.Models.Airport a) =>
+            a.IataId.Equals(queryUpper, StringComparison.OrdinalIgnoreCase) ||
+            a.LocalId.Equals(queryUpper, StringComparison.OrdinalIgnoreCase);
+
         var results = airportRepository.AllAirports
-            .Where(a =>
-                a.IataId.Equals(queryUpper, StringComparison.OrdinalIgnoreCase) ||
-                a.LocalId.Equals(queryUpper, StringComparison.OrdinalIgnoreCase) ||
-                a.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Where(a => MatchCode(a) || a.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(MatchCode)
+            .ThenBy(a => a.Name)
             .Take(25)
             .ToList();
 

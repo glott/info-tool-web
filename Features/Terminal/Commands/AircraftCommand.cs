@@ -21,13 +21,28 @@ public class AircraftCommand(AircraftTypeRepository aircraftTypeRepository) : IT
         }
 
         var query = string.Join(" ", args.Positional);
+
+        // Mirror the /codes page: type designators match exactly; only fall
+        // back to manufacturer/model search when no type matches. Every query
+        // term must appear in "Manufacturer Model" so "boeing 737" works even
+        // though the terms span both fields.
         var results = aircraftTypeRepository.AllAircraftTypes
-            .Where(a =>
-                a.IcaoId.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                a.Manufacturer.Contains(query, StringComparison.OrdinalIgnoreCase) ||
-                a.Model.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .Take(25)
+            .Where(a => a.IcaoId.Equals(query, StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+        if (results.Count == 0)
+        {
+            var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            results = aircraftTypeRepository.AllAircraftTypes
+                .Where(a =>
+                {
+                    var combined = $"{a.Manufacturer} {a.Model}";
+                    return terms.All(t => combined.Contains(t, StringComparison.OrdinalIgnoreCase));
+                })
+                .ToList();
+        }
+
+        results = results.Take(25).ToList();
 
         if (results.Count == 0)
         {

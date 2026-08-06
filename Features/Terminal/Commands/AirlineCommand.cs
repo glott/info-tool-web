@@ -21,11 +21,27 @@ public class AirlineCommand(AirlineRepository airlineRepository) : ITerminalComm
         }
 
         var query = string.Join(" ", args.Positional);
-        var results = airlineRepository.AllAirlines
-            .Where(a =>
-                (a.IcaoId?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (a.Callsign?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (a.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+
+        // Mirror the /codes page: a 3-letter query is an ICAO code lookup.
+        // Substring-matching the code against callsigns and names buries the
+        // airline under unrelated hits (SWA → VOLKSWAGEN, ESWATINI, ...).
+        var results = query.Length == 3
+            ? airlineRepository.AllAirlines
+                .Where(a => query.Equals(a.IcaoId, StringComparison.OrdinalIgnoreCase))
+                .ToList()
+            : [];
+
+        if (results.Count == 0)
+        {
+            results = airlineRepository.AllAirlines
+                .Where(a =>
+                    (a.Callsign?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                    a.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
+        results = results
+            .DistinctBy(a => (a.IcaoId, a.Callsign, a.Name, a.Country))
             .Take(25)
             .ToList();
 
