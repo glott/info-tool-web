@@ -1,8 +1,9 @@
+using System.Text.RegularExpressions;
 using ZoaReference.Features.Nasr.Models;
 
 namespace ZoaReference.Features.Nasr.Services;
 
-public static class NasrParser
+public static partial class NasrParser
 {
     /// <summary>
     /// Parses NAV.txt fixed-width records for navaids (VOR, VORTAC, TACAN, NDB, etc.).
@@ -59,12 +60,16 @@ public static class NasrParser
             var recordType = SafeSubstring(line, 0, 4).Trim();
             if (recordType != "AWY2") continue;
 
-            var airwayId = SafeSubstring(line, 4, 5).Trim();
+            var airwayId = ParseAirwayKey(line);
             var seqStr = SafeSubstring(line, 10, 5).Trim();
-            var fixId = SafeSubstring(line, 15, 30).Trim();
 
-            // Take just the navaid portion (first space-delimited token)
-            var fixIdClean = fixId.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? fixId;
+            // Prefer the short identifier marker in the record tail
+            // (e.g. "SJC V334 *SJC*D" → "SJC", "V334 *SUNOL*CA" → "SUNOL");
+            // fall back to the first word of the station name field.
+            var fixId = FixIdMarkerRegex().Match(SafeSubstring(line, 111, line.Length)) is { Success: true } m
+                ? m.Groups[1].Value
+                : SafeSubstring(line, 15, 30).Trim()
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
 
             var latStr = SafeSubstring(line, 83, 14).Trim();
             var lonStr = SafeSubstring(line, 97, 14).Trim();
@@ -73,9 +78,9 @@ public static class NasrParser
 
             if (!int.TryParse(seqStr, out var sequence)) sequence = 0;
 
-            if (string.IsNullOrEmpty(fixIdClean) || string.IsNullOrEmpty(airwayId)) continue;
+            if (string.IsNullOrEmpty(fixId) || string.IsNullOrEmpty(airwayId)) continue;
 
-            fixes.Add(new AirwayFix(fixIdClean, airwayId, sequence, lat, lon));
+            fixes.Add(new AirwayFix(fixId, airwayId, sequence, lat, lon));
         }
 
         return fixes;
@@ -83,7 +88,9 @@ public static class NasrParser
 
     /// <summary>
     /// Parses AWY.txt fixed-width records for airway MEA/MOCA restrictions.
-    /// NASR AWY3 records contain altitude restrictions between fixes.
+    /// NASR AWY1 records carry the altitude data, keyed by the sequence of the
+    /// fix that ends the segment: MEA at 74-79, MEA opposite direction at
+    /// 85-90, MOCA at 101-106. All values are feet.
     /// </summary>
     public static List<AirwayRestriction> ParseAirwayRestrictions(string text)
     {
@@ -92,31 +99,46 @@ public static class NasrParser
 
         while (reader.ReadLine() is { } line)
         {
-            if (line.Length < 80) continue;
+            if (line.Length < 110) continue;
 
             var recordType = SafeSubstring(line, 0, 4).Trim();
-            if (recordType != "AWY3") continue;
+            if (recordType != "AWY1") continue;
 
-            var airwayId = SafeSubstring(line, 4, 5).Trim();
-            var fromFix = SafeSubstring(line, 10, 30).Trim().Split(' ').FirstOrDefault() ?? "";
-            var toFix = SafeSubstring(line, 40, 30).Trim().Split(' ').FirstOrDefault() ?? "";
-            var meaStr = SafeSubstring(line, 74, 5).Trim();
-            var mocaStr = SafeSubstring(line, 114, 5).Trim();
-            var direction = SafeSubstring(line, 70, 2).Trim();
+            var airwayId = ParseAirwayKey(line);
+            if (string.IsNullOrEmpty(airwayId)) continue;
 
-            int? mea = int.TryParse(meaStr, out var m) ? m : null;
-            int? moca = int.TryParse(mocaStr, out var mc) ? mc : null;
+            var seqStr = SafeSubstring(line, 10, 5).Trim();
+            if (!int.TryParse(seqStr, out var sequence)) continue;
 
-            if (string.IsNullOrEmpty(airwayId) || string.IsNullOrEmpty(fromFix)) continue;
+            var mea = ParseAltitudeFeet(line, 74);
+            var meaOpposite = ParseAltitudeFeet(line, 85);
+            var moca = ParseAltitudeFeet(line, 101);
+            if (mea is null && meaOpposite is null && moca is null) continue;
 
-            restrictions.Add(new AirwayRestriction(
-                airwayId, fromFix, toFix,
-                mea, moca,
-                string.IsNullOrEmpty(direction) ? null : direction));
+            restrictions.Add(new AirwayRestriction(airwayId, sequence, mea, meaOpposite, moca));
         }
 
         return restrictions;
     }
+
+    /// <summary>
+    /// Extracts the airway key from an AWY record header. NASR reuses airway
+    /// designators across regions (e.g. V334 exists in both California and
+    /// Alaska); the one-char airway type at position 9 (blank = CONUS,
+    /// "A" = Alaska, "H" = Hawaii) is appended to keep them distinct,
+    /// e.g. "V334" vs "V334A".
+    /// </summary>
+    private static string ParseAirwayKey(string line) =>
+        SafeSubstring(line, 4, 5).Trim() + SafeSubstring(line, 9, 1).Trim();
+
+    private static int? ParseAltitudeFeet(string line, int start)
+    {
+        var s = SafeSubstring(line, start, 5).Trim();
+        return s.Length > 0 && s.All(char.IsAsciiDigit) && int.TryParse(s, out var v) ? v : null;
+    }
+
+    [GeneratedRegex(@"\*([A-Z]{2,5})\*")]
+    private static partial Regex FixIdMarkerRegex();
 
     /// <summary>
     /// Parses NASR-formatted coordinates like "37-37-08.070N" or "122-23-14.630W"

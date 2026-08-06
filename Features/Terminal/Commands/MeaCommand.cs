@@ -219,33 +219,34 @@ public partial class MeaCommand(NasrDataService nasrDataService) : ITerminalComm
             }
         }
 
-        HashSet<string>? traversed = null;
-        if (entrySeq is not null && exitSeq is not null)
-        {
-            var minSeq = Math.Min(entrySeq.Value, exitSeq.Value);
-            var maxSeq = Math.Max(entrySeq.Value, exitSeq.Value);
-            traversed = new HashSet<string>(
-                fixes.Where(f => f.Sequence >= minSeq && f.Sequence <= maxSeq)
-                    .Select(f => f.FixId),
-                StringComparer.OrdinalIgnoreCase);
-        }
-
+        var orderedFixes = fixes.OrderBy(f => f.Sequence).ToList();
         var segments = new List<MeaSegment>();
         foreach (var r in restrictions)
         {
             if (r.Mea is null) continue;
-            if (traversed is not null)
+
+            // A restriction at sequence N covers the segment ending at the fix
+            // with sequence N. When both route endpoints resolved, keep only
+            // segments inside the traversed range (excluding the segment that
+            // ends at the entry fix itself).
+            if (entrySeq is not null && exitSeq is not null)
             {
-                if (!traversed.Contains(r.FromFix)) continue;
-                if (!traversed.Contains(r.ToFix)) continue;
+                var minSeq = Math.Min(entrySeq.Value, exitSeq.Value);
+                var maxSeq = Math.Max(entrySeq.Value, exitSeq.Value);
+                if (r.Sequence <= minSeq || r.Sequence > maxSeq) continue;
             }
+
+            var endIdx = orderedFixes.FindIndex(f => f.Sequence == r.Sequence);
+            if (endIdx < 0) continue;
+            var toFix = orderedFixes[endIdx].FixId;
+            var fromFix = endIdx > 0 ? orderedFixes[endIdx - 1].FixId : $"seq{r.Sequence - 10}";
 
             segments.Add(new MeaSegment(
                 leg.Airway,
-                r.FromFix,
-                r.ToFix,
-                r.Mea.Value * 100,
-                r.Moca.HasValue ? r.Moca.Value * 100 : null));
+                fromFix,
+                toFix,
+                r.Mea.Value,
+                r.Moca));
         }
         return segments;
     }

@@ -16,7 +16,7 @@ public class AirwayCommand(NasrDataService nasrDataService) : ITerminalCommand
                            "    airway V25 SJC MOD — Highlight SJC and MOD\n" +
                            "    airway SUNOL       — Find all airways containing SUNOL";
 
-    private static readonly Regex AirwayPattern = new(@"^[VJQT]\d+$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex AirwayPattern = new(@"^[VJQT]\d+[AH]?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public async Task<CommandResult> ExecuteAsync(CommandArgs args)
     {
@@ -96,16 +96,35 @@ public class AirwayCommand(NasrDataService nasrDataService) : ITerminalCommand
         var restrictions = await nasrDataService.GetAirwayRestrictions(airwayId);
         if (restrictions.Count > 0)
         {
-            sb.AppendLine();
-            var rWidths = new[] { 12, 12, 10, 10 };
-            sb.Append(TextFormatter.FormatTableHeader($"MEA/MOCA — {airwayId}",
-                ["From", "To", "MEA", "MOCA"], rWidths));
-
-            foreach (var r in restrictions)
+            // Restrictions are keyed by the sequence of the fix ending the
+            // segment; label each row with the adjacent display-order fixes.
+            var bySeq = restrictions
+                .GroupBy(r => r.Sequence)
+                .ToDictionary(g => g.Key, g => g.First());
+            var rows = new List<string[]>();
+            for (var i = 1; i < fixes.Count; i++)
             {
-                var mea = r.Mea.HasValue ? $"{r.Mea}00" : "-";
-                var moca = r.Moca.HasValue ? $"{r.Moca}00" : "-";
-                sb.AppendLine(TextFormatter.FormatTableRow([r.FromFix, r.ToFix, mea, moca], rWidths));
+                var from = fixes[i - 1];
+                var to = fixes[i];
+                if (!bySeq.TryGetValue(Math.Max(from.Sequence, to.Sequence), out var r)) continue;
+                if (r.Mea is null && r.Moca is null) continue;
+                rows.Add([
+                    from.FixId, to.FixId,
+                    r.Mea.HasValue ? $"{r.Mea:N0}" : "-",
+                    r.Moca.HasValue ? $"{r.Moca:N0}" : "-"
+                ]);
+            }
+
+            if (rows.Count > 0)
+            {
+                sb.AppendLine();
+                var rWidths = new[] { 12, 12, 10, 10 };
+                sb.Append(TextFormatter.FormatTableHeader($"MEA/MOCA — {airwayId}",
+                    ["From", "To", "MEA", "MOCA"], rWidths));
+                foreach (var row in rows)
+                {
+                    sb.AppendLine(TextFormatter.FormatTableRow(row, rWidths));
+                }
             }
         }
 
