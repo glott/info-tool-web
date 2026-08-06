@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ZoaReference.Features.Terminal.Services;
 
@@ -14,7 +15,7 @@ public enum AnsiColor
     Magenta
 }
 
-public static class TextFormatter
+public static partial class TextFormatter
 {
     private static string ColorCode(AnsiColor color) => color switch
     {
@@ -63,10 +64,20 @@ public static class TextFormatter
         {
             var val = values[i] ?? "";
             var width = i < widths.Length ? widths[i] : 12;
-            sb.Append(val.PadRight(width));
+            sb.Append(val);
+            // Pad by visible length so colorized cells stay aligned —
+            // ANSI escape codes take no columns on screen.
+            var visible = AnsiEscapeRegex().Replace(val, "").Length;
+            if (visible < width)
+            {
+                sb.Append(' ', width - visible);
+            }
         }
         return sb.ToString();
     }
+
+    [GeneratedRegex(@"\x1b\[[0-9;]*m")]
+    private static partial Regex AnsiEscapeRegex();
 
     public static string FormatTableEmpty(string title, string message)
     {
