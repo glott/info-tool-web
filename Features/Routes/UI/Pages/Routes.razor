@@ -181,10 +181,10 @@
     <div>
         <EditForm Model="@_routeForm" OnValidSubmit="@RouteSubmit">
             <DataAnnotationsValidator/>
-            <InputText @bind-Value="_routeForm.DepartureId" id="departureInput"
+            <InputText @bind-Value="_routeForm.DepartureId" id="departureInput" autocomplete="off"
                        class="uppercase bg-transparent border border-gray-500 focus:outline-none focus:bg-gray-700 p-0.5 mb-2 ml-1 w-40"
                        placeholder="Departure ID"/>
-            <InputText @bind-Value="_routeForm.ArrivalId"
+            <InputText @bind-Value="_routeForm.ArrivalId" autocomplete="off"
                        class="uppercase bg-transparent border border-gray-500 focus:outline-none focus:bg-gray-700 p-0.5 mb-2 ml-1 w-40"
                        placeholder="Arrival ID"/>
             <button type="submit" class="rounded bg-orange-900 transition-colors hover:bg-orange-800 p-1 ml-3">
