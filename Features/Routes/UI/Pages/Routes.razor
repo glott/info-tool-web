@@ -565,6 +565,96 @@
     private bool _showValidDestinations = false;
     private string _lastSearchedOrigin = "";
     private List<CdrRecord> _allCdrs = new();
+
+    // ---- Shared CDR database cache -------------------------------------------
+    // These are STATIC: one cache for the whole server process, shared by every
+    // user/circuit. The FAA database is downloaded at most once per refresh
+    // cycle regardless of how many people use the tool.
+    //
+    // Refresh rule: the database is considered fresh if it was downloaded at or
+    // after the most recent 0901 UTC boundary. So a copy fetched at 0400Z is
+    // refreshed when someone uses the tool at 1000Z (picking up AIRAC/database
+    // cycle updates published around 0900Z), but a copy fetched at 1000Z serves
+    // everyone until 0901Z the next day -- on average one FAA hit per day.
+    private static readonly SemaphoreSlim CdrFetchLock = new(1, 1);
+    private static readonly TimeSpan CdrRetryBackoff = TimeSpan.FromHours(12);
+    private static List<CdrRecord> _sharedCdrs = new();
+    private static DateTime _cdrLastFetchUtc = DateTime.MinValue;
+    private static DateTime _cdrLastAttemptUtc = DateTime.MinValue;
+
+    private static DateTime LatestCdrRefreshBoundary(DateTime nowUtc)
+    {
+        var todayBoundary = nowUtc.Date.AddHours(9).AddMinutes(1); // 0901Z
+        return nowUtc >= todayBoundary ? todayBoundary : todayBoundary.AddDays(-1);
+    }
+
+    private static bool IsCdrCacheFresh(DateTime nowUtc) =>
+        _sharedCdrs.Count > 0 && _cdrLastFetchUtc >= LatestCdrRefreshBoundary(nowUtc);
+
+    private async Task<List<CdrRecord>> GetCdrDatabaseAsync()
+    {
+        if (IsCdrCacheFresh(DateTime.UtcNow))
+        {
+            return _sharedCdrs;
+        }
+
+        await CdrFetchLock.WaitAsync();
+        try
+        {
+            // Re-check inside the lock: another circuit may have refreshed while we waited
+            var now = DateTime.UtcNow;
+            if (IsCdrCacheFresh(now))
+            {
+                return _sharedCdrs;
+            }
+
+            // A recent failed attempt backs off rather than hammering FAA;
+            // serve the stale copy if we have one
+            if (now - _cdrLastAttemptUtc < CdrRetryBackoff)
+            {
+                if (_sharedCdrs.Count > 0) return _sharedCdrs;
+                throw new InvalidOperationException("CDR database fetch recently failed; backing off.");
+            }
+
+            _cdrLastAttemptUtc = now;
+            try
+            {
+                var csvData = await Http.GetStringAsync("https://www.fly.faa.gov/rmt/data_file/codedswap_db.csv");
+                var parsed = ParseCdrCsv(csvData);
+                if (parsed.Count > 0)
+                {
+                    _sharedCdrs = parsed;
+                    _cdrLastFetchUtc = now;
+                }
+                return _sharedCdrs.Count > 0 ? _sharedCdrs : parsed;
+            }
+            catch when (_sharedCdrs.Count > 0)
+            {
+                // Refresh failed but we have an older copy -- serve stale rather
+                // than erroring; next attempt happens after the backoff window
+                return _sharedCdrs;
+            }
+        }
+        finally
+        {
+            CdrFetchLock.Release();
+        }
+    }
+
+    // Fired on page load so the shared cache is (re)warmed once per cycle even
+    // before anyone searches; errors are swallowed here and surface on search
+    private async Task WarmCdrCacheAsync()
+    {
+        try
+        {
+            await GetCdrDatabaseAsync();
+        }
+        catch
+        {
+            // ignore -- FetchAndFilterCdrs reports errors to the user when relevant
+        }
+    }
+    // --------------------------------------------------------------------------
     private List<CdrRecord> _displayedCdrs = new();
     private List<string> _validDestinations = new();
 
@@ -573,6 +663,10 @@
         if (firstRender)
         {
             _storage = await Js.InvokeAsync<IJSObjectReference>("import", "./scripts/storage.js");
+
+            // Warm the shared CDR cache in the background on page load (downloads
+            // at most once per 0901Z cycle server-wide; instant no-op otherwise)
+            _ = WarmCdrCacheAsync();
 
             // Restore persisted CDR toggle before any search renders results
             var storedShowCdrs = await _storage.InvokeAsync<bool?>("get", ShowCdrsStorageKey);
@@ -688,11 +782,9 @@
             _isCdrLoading = true;
             _cdrError = false;
 
-            if (!_allCdrs.Any())
-            {
-                var csvData = await Http.GetStringAsync("https://www.fly.faa.gov/rmt/data_file/codedswap_db.csv");
-                _allCdrs = ParseCdrCsv(csvData);
-            }
+            // Served from the shared server-wide cache; FAA is only contacted
+            // if the cache is stale for the current 0901Z cycle
+            _allCdrs = await GetCdrDatabaseAsync();
 
             var originCdrs = _allCdrs.Where(c => c.Orig.Equals(orig, StringComparison.OrdinalIgnoreCase)).ToList();
 
