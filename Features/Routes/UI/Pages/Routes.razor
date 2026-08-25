@@ -73,6 +73,14 @@
     .cdr-grid .cdr-col-coord {
         white-space: nowrap;
     }
+
+    /* Real World Routes: reserve room in the Altitude column so a full range
+       like "11000 - FL370" never wraps. nowrap is the guarantee; min-width
+       keeps the column stable even when most rows are empty. */
+    .rw-col-alt {
+        min-width: 8rem;
+        white-space: nowrap;
+    }
 </style>
 
 <div class="flex flex-col text-s gap-8">
@@ -234,10 +242,22 @@
             }
             else if (_displayedRwRoutes is not null)
             {
-                <QuickGrid Items="@_displayedRwRoutes.FlightRouteSummaries.AsQueryable()">
+                <QuickGrid Items="@GetFilteredRwRoutes().AsQueryable()">
                     <PropertyColumn Property="@(p => p.RouteFrequency)" Title="Freq"/>
-                    <PropertyColumn Property="@(p => p.Route)" Title="Route"/>
-                    <TemplateColumn Title="Altitude">
+                    <TemplateColumn Title="Route">
+                        <div class="flex items-start gap-2">
+                            <button type="button"
+                                    @onclick="@(() => CopyToClipboard(context.Route))"
+                                    class="p-1 text-gray-300 hover:text-white bg-slate-700 hover:bg-slate-600 border border-slate-500 rounded transition-colors shrink-0 mt-0.5"
+                                    title="Copy Route">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                            </button>
+                            <span>@context.Route</span>
+                        </div>
+                    </TemplateColumn>
+                    <TemplateColumn Title="Altitude" Class="rw-col-alt">
                         @switch (context.MinAltitude)
                         {
                             case null when context.MaxAltitude is null:
@@ -263,14 +283,46 @@
                     </TemplateColumn>
                 </QuickGrid>
 
-                <QuickGrid Items="@_displayedRwRoutes.MostRecent.AsQueryable()">
-                    <PropertyColumn Property="@(p => p.Callsign)"/>
-                    <PropertyColumn Property="@(p => p.AircraftIcaoId)" Title="Type"/>
-                    <PropertyColumn Property="@(p => p.Route)"/>
-                    <TemplateColumn Title="Altitude">
-                        <span>@ToFlightLevel(context.Altitude)</span>
-                    </TemplateColumn>
-                </QuickGrid>
+                <div class="mt-2">
+                    <div class="flex gap-2">
+                        <button type="button"
+                                @onclick="() => _showIndividualFlights = !_showIndividualFlights"
+                                class="rounded bg-slate-700 hover:bg-slate-600 transition-colors p-1.5 text-xs">
+                            @(_showIndividualFlights ? "Hide Individual Flights" : "Show Individual Flights")
+                        </button>
+                        <button type="button"
+                                @onclick="() => _showInfrequentRoutes = !_showInfrequentRoutes"
+                                class="rounded bg-slate-700 hover:bg-slate-600 transition-colors p-1.5 text-xs">
+                            @(_showInfrequentRoutes ? "Hide Infrequent Routes" : $"Show Infrequent Routes ({InfrequentRouteCount})")
+                        </button>
+                    </div>
+
+                    @if (_showIndividualFlights)
+                    {
+                        <div class="mt-2">
+                            <QuickGrid Items="@_displayedRwRoutes.MostRecent.AsQueryable()">
+                                <PropertyColumn Property="@(p => p.Callsign)"/>
+                                <PropertyColumn Property="@(p => p.AircraftIcaoId)" Title="Type"/>
+                                <TemplateColumn Title="Route">
+                                    <div class="flex items-start gap-2">
+                                        <button type="button"
+                                                @onclick="@(() => CopyToClipboard(context.Route))"
+                                                class="p-1 text-gray-300 hover:text-white bg-slate-700 hover:bg-slate-600 border border-slate-500 rounded transition-colors shrink-0 mt-0.5"
+                                                title="Copy Route">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                            </svg>
+                                        </button>
+                                        <span>@context.Route</span>
+                                    </div>
+                                </TemplateColumn>
+                                <TemplateColumn Title="Altitude" Class="rw-col-alt">
+                                    <span>@ToFlightLevel(context.Altitude)</span>
+                                </TemplateColumn>
+                            </QuickGrid>
+                        </div>
+                    }
+                </div>
             }
             else if (_isRwRoutesError)
             {
@@ -296,6 +348,55 @@
     private IEnumerable<LoaRule> _displayedLoaRules = Enumerable.Empty<LoaRule>();
     private bool _showRwRoutesLoading;
     private bool _isRwRoutesError;
+    private bool _showIndividualFlights = false;
+    private bool _showInfrequentRoutes = false;
+
+    private IEnumerable<FlightRouteSummary> GetFilteredRwRoutes()
+    {
+        if (_displayedRwRoutes is null) return Enumerable.Empty<FlightRouteSummary>();
+
+        var allRoutes = _displayedRwRoutes.FlightRouteSummaries;
+        if (_showInfrequentRoutes) return allRoutes;
+
+        var totalFlights = allRoutes.Sum(s => s.RouteFrequency);
+        if (totalFlights == 0) return Enumerable.Empty<FlightRouteSummary>();
+
+        // Step 1: All routes > 5%
+        var routesOver5Pct = allRoutes
+            .Where(s => (double)s.RouteFrequency / totalFlights > 0.05)
+            .ToList();
+
+        // Step 2: If less than 5 routes, add candidates that are > 1% and frequency >= 5
+        if (routesOver5Pct.Count < 5)
+        {
+            var candidates = allRoutes
+                .Where(s => (double)s.RouteFrequency / totalFlights > 0.01 && s.RouteFrequency >= 5)
+                .OrderByDescending(s => s.RouteFrequency)
+                .ToList();
+
+            if (!candidates.Any()) return routesOver5Pct;
+
+            // Determine minimum frequency to reach at least 5 routes while keeping ties
+            var targetIndex = Math.Min(4, candidates.Count - 1);
+            var minFreqCutoff = candidates[targetIndex].RouteFrequency;
+
+            return candidates.Where(s => s.RouteFrequency >= minFreqCutoff);
+        }
+
+        return routesOver5Pct;
+    }
+
+    private int InfrequentRouteCount
+    {
+        get
+        {
+            if (_displayedRwRoutes is null) return 0;
+            var total = _displayedRwRoutes.FlightRouteSummaries.Count();
+            var visible = GetFilteredRwRoutes().Count();
+            return total - visible;
+        }
+    }
+
     private IJSObjectReference? _storage;
 
     // CDR state variables
