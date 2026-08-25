@@ -81,6 +81,71 @@
         min-width: 8rem;
         white-space: nowrap;
     }
+
+    /* Faint ORIG+DEST prefix in the CDR Route Code column. Done here instead of
+       Tailwind's opacity-25 because utility classes not used elsewhere in the app
+       aren't in the compiled stylesheet and silently do nothing. */
+    .cdr-grid .cdr-code-prefix {
+        opacity: 0.375;
+    }
+
+    /* Valid CDR Destinations: fixed-width grid tracks so the codes align in
+       vertical columns. Track width is sized to a 4-char code ("KWWW") plus a
+       little padding; fixed tracks (no 1fr) keep the pills from stretching.
+       space-between spreads the leftover row space evenly between columns so
+       the first and last columns sit flush with both panel edges. */
+    .cdr-dest-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, 3.5rem);
+        justify-content: space-between;
+        gap: 0.5rem;
+    }
+
+    .cdr-dest-grid span,
+    .cdr-dest-grid button {
+        text-align: center;
+    }
+
+    /* Custom tooltip on the destination buttons with a 2s hover delay.
+       The native title attribute can't do this -- its delay is fixed by the
+       browser. The delay lives only on the :hover rule, so the tooltip still
+       hides instantly when the cursor leaves. */
+    .cdr-dest-grid button {
+        position: relative;
+    }
+
+    .cdr-dest-grid button::after {
+        content: "Double-click to search this destination";
+        position: absolute;
+        bottom: calc(100% + 0.35rem);
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: rgb(15 23 42);   /* slate-900 */
+        border: 1px solid rgb(71 85 105);  /* slate-600 */
+        color: rgb(226 232 240);           /* slate-200 */
+        padding: 0.25rem 0.5rem;
+        border-radius: 0.25rem;
+        font-size: 0.75rem;
+        white-space: nowrap;
+        pointer-events: none;
+        z-index: 10;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 150ms, visibility 150ms;
+    }
+
+    .cdr-dest-grid button:hover::after {
+        opacity: 1;
+        visibility: visible;
+        transition-delay: 2s;
+    }
+
+    /* Shared vertical padding above the section toggle buttons.
+       One knob so "Show Valid CDR Destinations" and "Show Individual Flights"
+       always match. */
+    .toggle-btn-row {
+        margin-top: 0.5rem;
+    }
 </style>
 
 <div class="flex flex-col text-s gap-8">
@@ -97,7 +162,7 @@
                 Search Routes
             </button>
             <label class="ml-4 inline-flex items-center cursor-pointer select-none">
-                <input type="checkbox" @bind="_showCdrs" class="form-checkbox h-4 w-4 text-orange-900 rounded bg-transparent border-gray-500 focus:ring-0" />
+                <input type="checkbox" @bind="_showCdrs" @bind:after="PersistShowCdrs" class="form-checkbox h-4 w-4 text-orange-900 rounded bg-transparent border-gray-500 focus:ring-0" />
                 <span class="ml-2">Toggle CDRs</span>
             </label>
             <ValidationMessage For="() => _routeForm.DepartureId"/>
@@ -180,7 +245,19 @@
                 else if (_displayedCdrs.Any())
                 {
                     <QuickGrid Items="@_displayedCdrs.AsQueryable()">
-                        <PropertyColumn Property="@(c => DisplayRouteCode(c.RCode))" Title="Route Code" Class="cdr-col-code" />
+                        <TemplateColumn Title="Route Code" Class="cdr-col-code">
+                            @{
+                                var (prefix, suffix) = GetSplitRouteCode(context.RCode);
+                            }
+                            @if (suffix is not null)
+                            {
+                                <span><span class="cdr-code-prefix">@prefix</span><strong class="font-bold">@suffix</strong></span>
+                            }
+                            else
+                            {
+                                <span>@prefix</span>
+                            }
+                        </TemplateColumn>
                         <PropertyColumn Property="@(c => c.DepFix)" Title="Fix" Class="cdr-col-fix" />
                         <TemplateColumn Title="Route String" Class="cdr-col-route">
                             <div class="flex items-start gap-2">
@@ -207,7 +284,7 @@
                         </TemplateColumn>
                     </QuickGrid>
 
-                    <div class="mt-4">
+                    <div class="toggle-btn-row">
                         <button type="button" 
                                 @onclick="() => _showValidDestinations = !_showValidDestinations" 
                                 class="rounded bg-slate-700 hover:bg-slate-600 transition-colors p-1.5 text-xs">
@@ -216,12 +293,14 @@
 
                         @if (_showValidDestinations)
                         {
-                            <div class="mt-2 p-2 bg-slate-900 border border-slate-700 rounded max-h-48 overflow-y-auto">
+                            <div class="mt-2 p-2 bg-slate-900 border border-slate-700 rounded">
                                 <p class="font-bold text-xs mb-1">Valid CDR Destinations (@_validDestinations.Count):</p>
-                                <div class="flex flex-wrap gap-2 text-xs">
+                                <div class="cdr-dest-grid text-xs">
                                     @foreach (var dest in _validDestinations)
                                     {
-                                        <span class="bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">@dest</span>
+                                        <button type="button"
+                                                @ondblclick="@(() => SelectCdrDestination(dest))"
+                                                class="bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700 hover:bg-slate-600 transition-colors cursor-pointer select-none">@dest</button>
                                     }
                                 </div>
                             </div>
@@ -283,7 +362,7 @@
                     </TemplateColumn>
                 </QuickGrid>
 
-                <div class="mt-2">
+                <div class="toggle-btn-row">
                     <div class="flex gap-2">
                         <button type="button"
                                 @onclick="() => _showIndividualFlights = !_showIndividualFlights"
@@ -414,6 +493,14 @@
         if (firstRender)
         {
             _storage = await Js.InvokeAsync<IJSObjectReference>("import", "./scripts/storage.js");
+
+            // Restore persisted CDR toggle before any search renders results
+            var storedShowCdrs = await _storage.InvokeAsync<bool?>("get", ShowCdrsStorageKey);
+            if (storedShowCdrs is not null)
+            {
+                _showCdrs = storedShowCdrs.Value;
+            }
+
             if (!string.IsNullOrWhiteSpace(QueryDeparture) && !string.IsNullOrWhiteSpace(QueryDestination))
             {
                 _routeForm.DepartureId = QueryDeparture;
@@ -584,16 +671,15 @@
         return records;
     }
 
-    // CDR route codes are ORIG(3) + DEST(3) + 2-char suffix, e.g. "MIALAXG0".
-    // Space-separate the segments for readability: "MIA LAX G0".
-    // Non-standard codes (shorter than 7 chars) pass through unchanged.
-    private static string DisplayRouteCode(string rCode)
+    // Splits standard 8-char CDR route codes into (prefix, suffix) to bold the last 2 characters.
+    // Non-standard codes (shorter than 7 chars) pass through with a null suffix.
+    private static (string Prefix, string? Suffix) GetSplitRouteCode(string rCode)
     {
         if (string.IsNullOrEmpty(rCode) || rCode.Length <= 6)
         {
-            return rCode;
+            return (rCode, null);
         }
-        return $"{rCode[..3]} {rCode[3..6]} {rCode[6..]}";
+        return (rCode[..^2], rCode[^2..]);
     }
 
     private static string FormatRouteString(string rawRoute, string orig, string dest)
@@ -644,7 +730,24 @@
         return alt >= 18000 ? $"FL{alt.ToString()[..3]}" : alt.ToString();
     }
 
+    private async Task PersistShowCdrs()
+    {
+        if (_storage is not null)
+        {
+            await _storage.InvokeVoidAsync("set", ShowCdrsStorageKey, _showCdrs);
+        }
+    }
+
+    // Double-clicking a Valid CDR Destination pill sets it as the arrival and re-searches
+    private async Task SelectCdrDestination(string dest)
+    {
+        _routeForm.ArrivalId = dest;
+        await RouteSubmit();
+    }
+
     private record struct SavedAirportPairRoutes(string DepartureId, string ArrivalId);
 
     private const string SavedAirportPairRoutesStorageKey = "SavedAirportPairRoutes";
+
+    private const string ShowCdrsStorageKey = "ShowCdrs";
 }
