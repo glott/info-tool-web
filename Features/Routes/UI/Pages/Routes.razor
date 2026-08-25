@@ -1,4 +1,6 @@
 @page "/routes"
+@using System.Net.Http
+@using System.Text.RegularExpressions
 @using ZoaReference.Features.IcaoReference.Repositories
 @using ZoaReference.Features.Routes.Models
 @using ZoaReference.Features.Routes.Repositories
@@ -13,12 +15,65 @@
 @inject AirportRepository Airports
 @inject IJSRuntime Js
 @inject NavigationManager NavigationManager
+@inject HttpClient Http
 
 @using Microsoft.Extensions.Options
 @inject IOptions<AppSettings> Settings
 
 <PageTitle>Routes - @Settings.Value.ARTCC Reference</PageTitle>
 
+<style>
+    /* NOTE: ::deep only works in a scoped Routes.razor.css file. In an inline
+       style block the rules are global, so plain descendant selectors are used. */
+
+    /* table-layout: fixed makes the widths below binding. With auto layout the browser
+       treats them as hints and re-distributes space once Route String overflows. */
+    .cdr-grid table {
+        width: 100%;
+        table-layout: fixed;
+    }
+
+    /* QuickGrid's default theme pads the header's inner elements, not the th itself:
+       .col-header-content gets padding-right: var(--col-gap) (1rem) and .col-title gets
+       0.1rem 0.4rem. Zeroing both reclaims that width and lines header text up with the
+       cell text below it. */
+    .cdr-grid .col-header-content {
+        padding-right: 0 !important;
+    }
+
+    .cdr-grid .col-title {
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+    }
+
+    /* Tighten vertical padding and manage column bounds cleanly */
+    .cdr-grid tr {
+        height: auto !important;
+    }
+
+    .cdr-grid td,
+    .cdr-grid th {
+        padding-top: 0.25rem !important;
+        padding-bottom: 0.25rem !important;
+        padding-left: 0.4rem !important;
+        padding-right: 0.4rem !important;
+        vertical-align: top;
+    }
+
+    /* Fixed widths, sized to header text (bold) + 1rem sort indicator + cell padding.
+       Tune these freely -- they're the only knobs. Route String has no width, so it
+       absorbs every remaining pixel. */
+    .cdr-grid .cdr-col-code { width: 8rem; }
+    .cdr-grid .cdr-col-fix { width: 5.5rem; }
+    .cdr-grid .cdr-col-coord { width: 6rem; }
+
+    /* Keep the short values on one line so they can't wrap inside a fixed width */
+    .cdr-grid .cdr-col-code,
+    .cdr-grid .cdr-col-fix,
+    .cdr-grid .cdr-col-coord {
+        white-space: nowrap;
+    }
+</style>
 
 <div class="flex flex-col text-s gap-8">
     <div>
@@ -30,9 +85,13 @@
             <InputText @bind-Value="_routeForm.ArrivalId"
                        class="uppercase bg-transparent border border-gray-500 focus:outline-none focus:bg-gray-700 p-0.5 mb-2 ml-1 w-40"
                        placeholder="Arrival ID"/>
-            <button type="submit" class="rounded bg-orange-900 transition-colors hover:bg-orange-800 p-1 ml-3">Search
-                Routes
+            <button type="submit" class="rounded bg-orange-900 transition-colors hover:bg-orange-800 p-1 ml-3">
+                Search Routes
             </button>
+            <label class="ml-4 inline-flex items-center cursor-pointer select-none">
+                <input type="checkbox" @bind="_showCdrs" class="form-checkbox h-4 w-4 text-orange-900 rounded bg-transparent border-gray-500 focus:ring-0" />
+                <span class="ml-2">Toggle CDRs</span>
+            </label>
             <ValidationMessage For="() => _routeForm.DepartureId"/>
             <ValidationMessage For="() => _routeForm.ArrivalId"/>
         </EditForm>
@@ -92,6 +151,79 @@
         </div>
     }
 
+    @if (_showCdrs)
+    {
+        <div class="border border-slate-600 p-2 cdr-grid">
+            <h1 class="text-2xl mb-2">Coded Departure Routes</h1>
+            @if (_isCdrLoading)
+            {
+                <Spinner />
+            }
+            else if (_cdrError)
+            {
+                <p class="text-red-400">Error fetching CDR database.</p>
+            }
+            else
+            {
+                @if (!_displayedCdrs.Any() && !string.IsNullOrWhiteSpace(_lastSearchedOrigin))
+                {
+                    <p>No CDRs for @_lastSearchedOrigin exist.</p>
+                }
+                else if (_displayedCdrs.Any())
+                {
+                    <QuickGrid Items="@_displayedCdrs.AsQueryable()">
+                        <PropertyColumn Property="@(c => DisplayRouteCode(c.RCode))" Title="Route Code" Class="cdr-col-code" />
+                        <PropertyColumn Property="@(c => c.DepFix)" Title="Fix" Class="cdr-col-fix" />
+                        <TemplateColumn Title="Route String" Class="cdr-col-route">
+                            <div class="flex items-start gap-2">
+                                <button type="button" 
+                                        @onclick="@(() => CopyToClipboard(FormatRouteString(context.RouteString, context.Orig, context.Dest)))"
+                                        class="p-1 text-gray-300 hover:text-white bg-slate-700 hover:bg-slate-600 border border-slate-500 rounded transition-colors shrink-0 mt-0.5"
+                                        title="Copy Route">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                    </svg>
+                                </button>
+                                <span>@FormatRouteString(context.RouteString, context.Orig, context.Dest)</span>
+                            </div>
+                        </TemplateColumn>
+                        <TemplateColumn Title="CoordReq" Class="cdr-col-coord">
+                            @if (context.CoordReq.Equals("Y", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                                    <path fill-rule="evenodd"
+                                          d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z"
+                                          clip-rule="evenodd"/>
+                                </svg>
+                            }
+                        </TemplateColumn>
+                    </QuickGrid>
+
+                    <div class="mt-4">
+                        <button type="button" 
+                                @onclick="() => _showValidDestinations = !_showValidDestinations" 
+                                class="rounded bg-slate-700 hover:bg-slate-600 transition-colors p-1.5 text-xs">
+                            @(_showValidDestinations ? "Hide Valid CDR Destinations" : "Show Valid CDR Destinations")
+                        </button>
+
+                        @if (_showValidDestinations)
+                        {
+                            <div class="mt-2 p-2 bg-slate-900 border border-slate-700 rounded max-h-48 overflow-y-auto">
+                                <p class="font-bold text-xs mb-1">Valid CDR Destinations (@_validDestinations.Count):</p>
+                                <div class="flex flex-wrap gap-2 text-xs">
+                                    @foreach (var dest in _validDestinations)
+                                    {
+                                        <span class="bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">@dest</span>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            }
+        </div>
+    }
+
     @if (_showRwRoutesLoading || _displayedRwRoutes is not null)
     {
         <div class="border border-slate-600 p-2">
@@ -148,16 +280,6 @@
             }
         </div>
     }
-
-    @* @if (!string.IsNullOrEmpty(_routeForm.DepartureId) && !string.IsNullOrEmpty(_routeForm.ArrivalId)) *@
-    @* { *@
-    @*     <div class="border border-slate-600 p-2"> *@
-    @*         <h1 class="text-2xl">Real World Routes</h1> *@
-    @*         <p>View on <a target="_blank" href="@FlightAware.MakeUrl(_routeForm.DepartureId, _routeForm.ArrivalId)" *@
-    @*                       class="underline">FlightAware</a>.</p> *@
-    @*     </div> *@
-    @* } *@
-
 </div>
 
 @code {
@@ -175,6 +297,16 @@
     private bool _showRwRoutesLoading;
     private bool _isRwRoutesError;
     private IJSObjectReference? _storage;
+
+    // CDR state variables
+    private bool _showCdrs = false;
+    private bool _isCdrLoading = false;
+    private bool _cdrError = false;
+    private bool _showValidDestinations = false;
+    private string _lastSearchedOrigin = "";
+    private List<CdrRecord> _allCdrs = new();
+    private List<CdrRecord> _displayedCdrs = new();
+    private List<string> _validDestinations = new();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -222,6 +354,12 @@
         var arrivalIcao = IdToIcaoId(_routeForm.ArrivalId);
         var arrivalLocal = IdToLocalId(_routeForm.ArrivalId);
 
+        // Process CDR search if enabled or initialized
+        _lastSearchedOrigin = NormalizeAirportCode(_routeForm.DepartureId);
+        var formattedDest = NormalizeAirportCode(_routeForm.ArrivalId);
+        
+        await FetchAndFilterCdrs(_lastSearchedOrigin, formattedDest);
+
         // Don't need null check here because Equals can take null
         _displayedAliasRouteRules = AliasRouteRules.GetAllRules()
             .Where(r => r.DepartureAirport.Equals(departureLocal, StringComparison.OrdinalIgnoreCase)
@@ -256,6 +394,127 @@
         }
     }
 
+    private string NormalizeAirportCode(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return "";
+        var code = id.Trim().ToUpper();
+        if (code.Length == 3 && code.All(char.IsLetter))
+        {
+            code = "K" + code;
+        }
+        return code;
+    }
+
+    private async Task FetchAndFilterCdrs(string orig, string dest)
+    {
+        if (string.IsNullOrWhiteSpace(orig)) return;
+
+        try
+        {
+            _isCdrLoading = true;
+            _cdrError = false;
+
+            if (!_allCdrs.Any())
+            {
+                var csvData = await Http.GetStringAsync("https://www.fly.faa.gov/rmt/data_file/codedswap_db.csv");
+                _allCdrs = ParseCdrCsv(csvData);
+            }
+
+            var originCdrs = _allCdrs.Where(c => c.Orig.Equals(orig, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            var filtered = string.IsNullOrWhiteSpace(dest)
+                ? originCdrs
+                : originCdrs.Where(c => c.Dest.Equals(dest, StringComparison.OrdinalIgnoreCase));
+
+            // Fixed sort: CoordReq "N" first (false sorts before true), then Route Code
+            _displayedCdrs = filtered
+                .OrderBy(c => c.CoordReq.Equals("Y", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(c => c.RCode, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // Generate unique destinations for origin sorted: K-prefixed codes first, then alphabetical
+            _validDestinations = originCdrs
+                .Select(c => c.Dest)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(d => d.StartsWith("K", StringComparison.OrdinalIgnoreCase))
+                .ThenBy(d => d)
+                .ToList();
+        }
+        catch (Exception)
+        {
+            _cdrError = true;
+        }
+        finally
+        {
+            _isCdrLoading = false;
+        }
+    }
+
+    private List<CdrRecord> ParseCdrCsv(string csvContent)
+    {
+        var records = new List<CdrRecord>();
+        using var reader = new System.IO.StringReader(csvContent);
+        string? line;
+        bool isFirstLine = true;
+
+        while ((line = reader.ReadLine()) != null)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (isFirstLine)
+            {
+                isFirstLine = false; // Skip CSV header line
+                continue;
+            }
+
+            var parts = line.Split(',');
+            if (parts.Length >= 9)
+            {
+                records.Add(new CdrRecord(
+                    RCode: parts[0].Trim(),
+                    Orig: parts[1].Trim(),
+                    Dest: parts[2].Trim(),
+                    DepFix: parts[3].Trim(),
+                    RouteString: parts[4].Trim(),
+                    CoordReq: parts[8].Trim()
+                ));
+            }
+        }
+
+        return records;
+    }
+
+    // CDR route codes are ORIG(3) + DEST(3) + 2-char suffix, e.g. "MIALAXG0".
+    // Space-separate the segments for readability: "MIA LAX G0".
+    // Non-standard codes (shorter than 7 chars) pass through unchanged.
+    private static string DisplayRouteCode(string rCode)
+    {
+        if (string.IsNullOrEmpty(rCode) || rCode.Length <= 6)
+        {
+            return rCode;
+        }
+        return $"{rCode[..3]} {rCode[3..6]} {rCode[6..]}";
+    }
+
+    private static string FormatRouteString(string rawRoute, string orig, string dest)
+    {
+        if (string.IsNullOrWhiteSpace(rawRoute)) return string.Empty;
+
+        // Strips origin from start and destination from end of route string
+        var cleaned = Regex.Replace(rawRoute, $@"^{Regex.Escape(orig)}\s+", "", RegexOptions.IgnoreCase);
+        cleaned = Regex.Replace(cleaned, $@"\s+{Regex.Escape(dest)}$", "", RegexOptions.IgnoreCase);
+        return cleaned.Trim();
+    }
+
+    private async Task CopyToClipboard(string text)
+    {
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            await Js.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        }
+    }
+
+    private record CdrRecord(string RCode, string Orig, string Dest, string DepFix, string RouteString, string CoordReq);
+
     private string? IdToIcaoId(string id)
     {
         if (id.Length == 4)
@@ -287,5 +546,4 @@
     private record struct SavedAirportPairRoutes(string DepartureId, string ArrivalId);
 
     private const string SavedAirportPairRoutesStorageKey = "SavedAirportPairRoutes";
-
 }
