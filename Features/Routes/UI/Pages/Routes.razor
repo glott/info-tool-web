@@ -82,6 +82,20 @@
         white-space: nowrap;
     }
 
+    /* Real World: hold the Route column at a consistent ~120ch target. Auto table
+       layout treats this as the desired width -- kept when space allows, compressed
+       (text wraps earlier) when not. Altitude can't be bumped: its nowrap text sets
+       a hard min-content floor the browser won't shrink below. */
+    td.rw-col-route {
+        width: 120ch;
+    }
+
+    /* CDR: fixed layout already gives Route all remaining width consistently
+       (CoordReq/Fix/Code hold their fixed widths); just cap the text line length */
+    .cdr-grid td.cdr-col-route span {
+        max-width: 120ch;
+    }
+
     /* LOA Routes: hold the Route column steady across searches. Sized to fit
        "GANDY# SABEE BAHMA Y353 SUMAC Y421 HAGIT Y308 ACONY SLUGO A638 PJM"
        plus the copy button on one line; longer routes can still grow it. */
@@ -316,7 +330,7 @@
                             }
                         </TemplateColumn>
                         <PropertyColumn Property="@(c => c.DepFix)" Title="Fix" Class="cdr-col-fix" />
-                        <TemplateColumn Title="Route String" Class="cdr-col-route">
+                        <TemplateColumn Title="Route" Class="cdr-col-route">
                             <div class="flex items-start gap-2">
                                 <button type="button" 
                                         @onclick="@(() => CopyToClipboard(FormatRouteString(context.RouteString, context.Orig, context.Dest)))"
@@ -380,7 +394,7 @@
             {
                 <QuickGrid Items="@GetFilteredRwRoutes().AsQueryable()">
                     <PropertyColumn Property="@(p => p.RouteFrequency)" Title="Freq"/>
-                    <TemplateColumn Title="Route">
+                    <TemplateColumn Title="Route" Class="rw-col-route">
                         <div class="flex items-start gap-2">
                             <button type="button"
                                     @onclick="@(() => CopyToClipboard(context.Route))"
@@ -393,30 +407,35 @@
                             <span>@context.Route</span>
                         </div>
                     </TemplateColumn>
-                    <TemplateColumn Title="Altitude" Class="rw-col-alt">
-                        @switch (context.MinAltitude)
-                        {
-                            case null when context.MaxAltitude is null:
-                                <span></span>
-                                break;
-                            case null:
-                                <span>@ToFlightLevel(context.MaxAltitude)</span>
-                                break;
-                            default:
+                    @* Altitude only renders when a currently-displayed route has one, so it
+                       appears/disappears as the infrequent-routes toggle changes the set *@
+                    @if (GetFilteredRwRoutes().Any(s => s.MinAltitude is not null || s.MaxAltitude is not null))
+                    {
+                        <TemplateColumn Title="Altitude" Class="rw-col-alt">
+                            @switch (context.MinAltitude)
                             {
-                                if (context.MaxAltitude is null)
+                                case null when context.MaxAltitude is null:
+                                    <span></span>
+                                    break;
+                                case null:
+                                    <span>@ToFlightLevel(context.MaxAltitude)</span>
+                                    break;
+                                default:
                                 {
-                                    <span>@ToFlightLevel(context.MinAltitude)</span>
-                                }
-                                else
-                                {
-                                    <span>@ToFlightLevel(context.MinAltitude) - @ToFlightLevel(context.MaxAltitude)</span>
-                                }
+                                    if (context.MaxAltitude is null)
+                                    {
+                                        <span>@ToFlightLevel(context.MinAltitude)</span>
+                                    }
+                                    else
+                                    {
+                                        <span>@ToFlightLevel(context.MinAltitude) - @ToFlightLevel(context.MaxAltitude)</span>
+                                    }
 
-                                break;
+                                    break;
+                                }
                             }
-                        }
-                    </TemplateColumn>
+                        </TemplateColumn>
+                    }
                 </QuickGrid>
 
                 <div class="toggle-btn-row">
@@ -439,7 +458,7 @@
                             <QuickGrid Items="@_displayedRwRoutes.MostRecent.AsQueryable()">
                                 <PropertyColumn Property="@(p => p.Callsign)"/>
                                 <PropertyColumn Property="@(p => p.AircraftIcaoId)" Title="Type"/>
-                                <TemplateColumn Title="Route">
+                                <TemplateColumn Title="Route" Class="rw-col-route">
                                     <div class="flex items-start gap-2">
                                         <button type="button"
                                                 @onclick="@(() => CopyToClipboard(context.Route))"
@@ -452,9 +471,12 @@
                                         <span>@context.Route</span>
                                     </div>
                                 </TemplateColumn>
-                                <TemplateColumn Title="Altitude" Class="rw-col-alt">
-                                    <span>@ToFlightLevel(context.Altitude)</span>
-                                </TemplateColumn>
+                                @if (_displayedRwRoutes.MostRecent.Any(f => f.Altitude is not null))
+                                {
+                                    <TemplateColumn Title="Altitude" Class="rw-col-alt">
+                                        <span>@ToFlightLevel(context.Altitude)</span>
+                                    </TemplateColumn>
+                                }
                             </QuickGrid>
                         </div>
                     }
