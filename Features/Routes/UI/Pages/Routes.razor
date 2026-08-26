@@ -26,33 +26,51 @@
     /* NOTE: ::deep only works in a scoped Routes.razor.css file. In an inline
        style block the rules are global, so plain descendant selectors are used. */
 
-    /* table-layout: fixed makes the widths below binding. With auto layout the browser
-       treats them as hints and re-distributes space once Route String overflows. */
-    .cdr-grid table {
-        width: 100%;
-        table-layout: fixed;
+    /* CDR / LOA / Real World tables share one sizing scheme:
+       - width:auto (fit-content) so columns hug their content and the rightmost
+         column (CoordReq / Notes / Altitude) sits just after the Route column
+         instead of drifting to the screen edge on wide monitors. A 100%-wide
+         table would distribute the surplus into the columns, which is exactly
+         the "CoordReq way off to the right" bug.
+       - max-width:100% so the table can never overflow a narrow viewport; when
+         space runs out the Route text wraps (it's the only wrappable content)
+         while the right columns keep their min-widths below. */
+    .cdr-grid table,
+    .loa-grid table,
+    .rw-grid table {
+        width: auto;
+        max-width: 100%;
+        table-layout: auto;
     }
 
     /* QuickGrid's default theme pads the header's inner elements, not the th itself:
        .col-header-content gets padding-right: var(--col-gap) (1rem) and .col-title gets
        0.1rem 0.4rem. Zeroing both reclaims that width and lines header text up with the
-       cell text below it. */
-    .cdr-grid .col-header-content {
+       cell text below it. Applied to all three grids: cross-table column alignment
+       only works if every grid uses identical paddings. */
+    .cdr-grid .col-header-content,
+    .loa-grid .col-header-content,
+    .rw-grid .col-header-content {
         padding-right: 0 !important;
     }
 
-    .cdr-grid .col-title {
+    .cdr-grid .col-title,
+    .loa-grid .col-title,
+    .rw-grid .col-title {
         padding-left: 0 !important;
         padding-right: 0 !important;
     }
 
     /* Tighten vertical padding and manage column bounds cleanly */
-    .cdr-grid tr {
+    .cdr-grid tr,
+    .loa-grid tr,
+    .rw-grid tr {
         height: auto !important;
     }
 
-    .cdr-grid td,
-    .cdr-grid th {
+    .cdr-grid td, .cdr-grid th,
+    .loa-grid td, .loa-grid th,
+    .rw-grid td, .rw-grid th {
         padding-top: 0.25rem !important;
         padding-bottom: 0.25rem !important;
         padding-left: 0.4rem !important;
@@ -60,47 +78,101 @@
         vertical-align: top;
     }
 
-    /* Fixed widths, sized to header text (bold) + 1rem sort indicator + cell padding.
-       Tune these freely -- they're the only knobs. Route String has no width, so it
-       absorbs every remaining pixel. */
+    /* ---- Cross-grid column alignment -------------------------------------
+       Notes / CoordReq / Altitude line up because every grid's columns to the
+       LEFT of them sum to the same total:
+
+           left-column budget (13.5rem) + route column (120ch + 3rem)
+
+       The 3rem covers the copy button + flex gap so a full 120-character route
+       still fits on one line. Per grid:
+         CDR:            code 8rem + fix 5.5rem = 13.5rem -> route 120ch + 3rem
+         LOA:            no left columns                  -> route 120ch + 3rem + 13.5rem
+         RW (main):      freq 4rem                        -> route 120ch + 3rem + 9.5rem
+         RW (flights):   callsign 5.5rem + type 4rem      -> route 120ch + 3rem + 4rem
+
+       These are PREFERRED widths under table-layout:auto -- honored when space
+       allows, compressed when the viewport is narrow. That's the crucial
+       difference from putting width:120ch on the route span itself: an explicit
+       span width sets a hard floor on the cell's minimum size, the table can
+       never shrink below it, and the right columns get shoved past the viewport
+       edge and clipped (the "columns disappear on small windows" bug). */
     .cdr-grid .cdr-col-code { width: 8rem; }
     .cdr-grid .cdr-col-fix { width: 5.5rem; }
-    .cdr-grid .cdr-col-coord { width: 6rem; }
+    .cdr-grid .cdr-col-route { width: calc(120ch + 3rem); }
+    .loa-grid .loa-col-route { width: calc(120ch + 3rem + 13.5rem); }
+    .rw-grid .rw-col-freq { width: 4rem; }
+    .rw-grid .rw-col-route { width: calc(120ch + 3rem + 9.5rem); }
+    .rw-grid .rw-flights .rw-col-callsign { width: 5.5rem; }
+    .rw-grid .rw-flights .rw-col-type { width: 4rem; }
+    .rw-grid .rw-flights .rw-col-route { width: calc(120ch + 3rem + 4rem); }
 
-    /* Keep the short values on one line so they can't wrap inside a fixed width */
+    /* Keep the short values on one line so they can't be wrapped into slivers */
     .cdr-grid .cdr-col-code,
     .cdr-grid .cdr-col-fix,
-    .cdr-grid .cdr-col-coord {
+    .cdr-grid .cdr-col-coord,
+    .rw-grid .rw-col-freq,
+    .rw-grid .rw-col-callsign,
+    .rw-grid .rw-col-type {
         white-space: nowrap;
     }
 
-    /* Real World Routes: reserve room in the Altitude column so a full range
-       like "11000 - FL370" never wraps. nowrap is the guarantee; min-width
-       keeps the column stable even when most rows are empty. */
-    .rw-col-alt {
-        min-width: 8rem;
+    /* Right columns: 16ch minimum, but free to grow rightward. Left edges align
+       via the budget above; 16ch keeps right edges aligned whenever content is
+       short. nowrap is what enables the growth: it makes longer content (like
+       "MIA EAST, TJ AOB 300") part of the column's minimum size, so the column
+       expands into the free space to its right instead of wrapping at 16ch.
+       Hardened two ways: !important beats any site-wide white-space override,
+       and the :last-child selectors reach the same cells structurally even if
+       the column Class doesn't land on the tds (Notes and CoordReq are each
+       their grid's final column; RNAV sits BEFORE Notes so this stays true).
+       The RW grid is excluded from :last-child on purpose -- its Altitude
+       column is conditional, and when absent Route would be :last-child and
+       must not be nowrap. display:none on CoordReq under 540px doesn't affect
+       this: :last-child matches on DOM position, not visibility. */
+    .cdr-grid .cdr-col-coord,
+    .loa-grid .loa-col-notes,
+    .rw-col-alt,
+    .cdr-grid td:last-child,
+    .cdr-grid th:last-child,
+    .loa-grid td:last-child,
+    .loa-grid th:last-child {
+        min-width: 16ch;
+        white-space: nowrap !important;
+    }
+
+    /* On very narrow viewports (phones), drop the CoordReq column entirely --
+       hiding both th and td removes the whole column and returns its width to
+       Route. 539.98px avoids a 1px band where neither rule applies on hidpi
+       screens. Note: the at-sign is doubled because Razor parses single
+       at-signs even inside style blocks and comments. */
+    @@media (max-width: 539.98px) {
+        .cdr-grid .cdr-col-coord {
+            display: none;
+        }
+    }
+
+    /* LOA RNAV column (renders only for some searches): fixed 8ch, sitting
+       between Route and Notes. When it's present the wrapper carries
+       .loa-has-rnav and the Route column gives up exactly RNAV's footprint
+       (8ch + its 0.8rem cell padding), so Notes stays aligned with
+       CoordReq/Altitude either way. */
+    .loa-grid .loa-col-rnav {
+        width: 8ch;
+        min-width: 8ch;
         white-space: nowrap;
     }
 
-    /* Real World: hold the Route column at a consistent ~120ch target. Auto table
-       layout treats this as the desired width -- kept when space allows, compressed
-       (text wraps earlier) when not. Altitude can't be bumped: its nowrap text sets
-       a hard min-content floor the browser won't shrink below. */
-    td.rw-col-route {
-        width: 120ch;
+    .loa-grid.loa-has-rnav .loa-col-route {
+        width: calc(120ch + 3rem + 13.5rem - 8ch - 0.8rem);
     }
 
-    /* CDR: fixed layout already gives Route all remaining width consistently
-       (CoordReq/Fix/Code hold their fixed widths); just cap the text line length */
-    .cdr-grid td.cdr-col-route span {
+    /* Route TEXT caps at 120 characters -- longer routes wrap. max-width (not
+       width!) so the cell's minimum size stays small and the table can shrink. */
+    .cdr-grid td.cdr-col-route span,
+    .loa-grid td.loa-col-route span,
+    .rw-grid td.rw-col-route span {
         max-width: 120ch;
-    }
-
-    /* LOA Routes: hold the Route column steady across searches. Sized to fit
-       "GANDY# SABEE BAHMA Y353 SUMAC Y421 HAGIT Y308 ACONY SLUGO A638 PJM"
-       plus the copy button on one line; longer routes can still grow it. */
-    .loa-col-route {
-        min-width: 40rem;
     }
 
     /* TEC/AAR/ADR: subtle separator line + symmetric padding between rows so
@@ -183,10 +255,10 @@
             <DataAnnotationsValidator/>
             <InputText @bind-Value="_routeForm.DepartureId" id="departureInput" autocomplete="off"
                        class="uppercase bg-transparent border border-gray-500 focus:outline-none focus:bg-gray-700 p-0.5 mb-2 ml-1 w-40"
-                       placeholder="Departure ID"/>
+                       placeholder="Origin"/>
             <InputText @bind-Value="_routeForm.ArrivalId" autocomplete="off"
                        class="uppercase bg-transparent border border-gray-500 focus:outline-none focus:bg-gray-700 p-0.5 mb-2 ml-1 w-40"
-                       placeholder="Arrival ID"/>
+                       placeholder="Destination"/>
             <button type="submit" class="rounded bg-orange-900 transition-colors hover:bg-orange-800 p-1 ml-3">
                 Search Routes
             </button>
@@ -253,7 +325,7 @@
     {
         @* Parent is flex-col: order 1 pushes this section visually after Real World
            Routes (all other sections keep default order 0) without duplicating markup *@
-        <div class="border border-slate-600 p-2" style="@(_loaAfterRwRoutes ? "order: 1" : null)">
+        <div class="border border-slate-600 p-2 loa-grid @(_displayedLoaRules.Any(r => !r.IsRnavRequired) ? "loa-has-rnav" : null)" style="@(_loaAfterRwRoutes ? "order: 1" : null)">
             <h1 class="text-2xl">LOA Routes</h1>
             <QuickGrid Items="@_displayedLoaRules.AsQueryable()">
                 <TemplateColumn Title="Route" Class="loa-col-route">
@@ -269,9 +341,12 @@
                         <span>@context.Route</span>
                     </div>
                 </TemplateColumn>
+                @* RNAV renders only for some searches; the loa-has-rnav wrapper class
+                   shrinks the Route column by RNAV's exact footprint so Notes stays
+                   aligned with CoordReq/Altitude whether or not RNAV is shown *@
                 @if (_displayedLoaRules.Any(r => !r.IsRnavRequired))
                 {
-                    <TemplateColumn Title="RNAV">
+                    <TemplateColumn Title="RNAV" Class="loa-col-rnav">
                         @if (context.IsRnavRequired)
                         {
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
@@ -282,7 +357,7 @@
                         }
                     </TemplateColumn>
                 }
-                <PropertyColumn Property="@(p => p.Notes)"/>
+                <PropertyColumn Property="@(p => p.Notes)" Class="loa-col-notes"/>
             </QuickGrid>
 
             <div class="toggle-btn-row">
@@ -309,11 +384,19 @@
             }
             else
             {
-                @if (!_displayedCdrs.Any() && !string.IsNullOrWhiteSpace(_lastSearchedOrigin))
+                @if (!string.IsNullOrWhiteSpace(_lastSearchedOrigin) && !_validDestinations.Any())
                 {
+                    @* The origin has no CDRs to anywhere *@
                     <p>No CDRs for @_lastSearchedOrigin exist.</p>
                 }
-                else if (_displayedCdrs.Any())
+                else if (!_displayedCdrs.Any() && !string.IsNullOrWhiteSpace(_lastSearchedOrigin))
+                {
+                    @* The origin has CDRs, just none to this destination; the Valid
+                       CDR Destinations toggle below stays available so the user can
+                       double-click a destination that does have them *@
+                    <p>No CDRs for @_lastSearchedOrigin-@_lastSearchedDest exist.</p>
+                }
+                @if (_displayedCdrs.Any())
                 {
                     <QuickGrid Items="@_displayedCdrs.AsQueryable()">
                         <TemplateColumn Title="Route Code" Class="cdr-col-code">
@@ -354,7 +437,10 @@
                             }
                         </TemplateColumn>
                     </QuickGrid>
+                }
 
+                @if (_validDestinations.Any())
+                {
                     <div class="toggle-btn-row">
                         <button type="button" 
                                 @onclick="() => _showValidDestinations = !_showValidDestinations" 
@@ -384,7 +470,7 @@
 
     @if (_showRwRoutesLoading || _displayedRwRoutes is not null)
     {
-        <div class="border border-slate-600 p-2">
+        <div class="border border-slate-600 p-2 rw-grid">
             <h1 class="text-2xl">Real World Routes</h1>
             @if (_showRwRoutesLoading)
             {
@@ -393,7 +479,7 @@
             else if (_displayedRwRoutes is not null)
             {
                 <QuickGrid Items="@GetFilteredRwRoutes().AsQueryable()">
-                    <PropertyColumn Property="@(p => p.RouteFrequency)" Title="Freq"/>
+                    <PropertyColumn Property="@(p => p.RouteFrequency)" Title="Freq" Class="rw-col-freq"/>
                     <TemplateColumn Title="Route" Class="rw-col-route">
                         <div class="flex items-start gap-2">
                             <button type="button"
@@ -454,10 +540,10 @@
 
                     @if (_showIndividualFlights)
                     {
-                        <div class="mt-2">
+                        <div class="mt-2 rw-flights">
                             <QuickGrid Items="@_displayedRwRoutes.MostRecent.AsQueryable()">
-                                <PropertyColumn Property="@(p => p.Callsign)"/>
-                                <PropertyColumn Property="@(p => p.AircraftIcaoId)" Title="Type"/>
+                                <PropertyColumn Property="@(p => p.Callsign)" Class="rw-col-callsign"/>
+                                <PropertyColumn Property="@(p => p.AircraftIcaoId)" Title="Type" Class="rw-col-type"/>
                                 <TemplateColumn Title="Route" Class="rw-col-route">
                                     <div class="flex items-start gap-2">
                                         <button type="button"
@@ -564,6 +650,7 @@
     private bool _cdrError = false;
     private bool _showValidDestinations = false;
     private string _lastSearchedOrigin = "";
+    private string _lastSearchedDest = "";
     private List<CdrRecord> _allCdrs = new();
 
     // ---- Shared CDR database cache -------------------------------------------
@@ -705,12 +792,14 @@
 
     private class RouteForm
     {
-        [Required]
-        [StringLength(4, ErrorMessage = "ID cannot exceed 4 characters.")]
+        [Display(Name = "Origin")]
+        [Required(ErrorMessage = "Please enter an origin airport.")]
+        [StringLength(4, ErrorMessage = "Origin cannot exceed 4 characters.")]
         public string DepartureId { get; set; } = "";
 
-        [Required]
-        [StringLength(4, ErrorMessage = "ID cannot exceed 4 characters.")]
+        [Display(Name = "Destination")]
+        [Required(ErrorMessage = "Please enter a destination airport.")]
+        [StringLength(4, ErrorMessage = "Destination cannot exceed 4 characters.")]
         public string ArrivalId { get; set; } = "";
     }
 
@@ -724,9 +813,9 @@
 
         // Process CDR search if enabled or initialized
         _lastSearchedOrigin = NormalizeAirportCode(_routeForm.DepartureId);
-        var formattedDest = NormalizeAirportCode(_routeForm.ArrivalId);
-        
-        await FetchAndFilterCdrs(_lastSearchedOrigin, formattedDest);
+        _lastSearchedDest = NormalizeAirportCode(_routeForm.ArrivalId);
+
+        await FetchAndFilterCdrs(_lastSearchedOrigin, _lastSearchedDest);
 
         // Don't need null check here because Equals can take null
         _displayedAliasRouteRules = AliasRouteRules.GetAllRules()
