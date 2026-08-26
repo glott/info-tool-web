@@ -110,6 +110,65 @@ public class CskoRouteService(
         "departure=" + departureIcao + "&arrival=" + arrivalIcao +
         "&since=" + SinceTimestamp(lookback);
 
+    /// <summary>
+    /// Searches individual flight plans by any combination of departure, arrival,
+    /// and a route waypoint. At least one criterion must be provided (API rule).
+    /// Returns most-recent-first individual filings, capped at <paramref name="limit"/>.
+    /// </summary>
+    public async Task<List<FlightPlanSearchResult>> SearchFlightPlansAsync(
+        string? departureIcao = null, string? arrivalIcao = null, string? routeWaypoint = null, int limit = 100)
+    {
+        var query = new List<string>();
+        if (!string.IsNullOrWhiteSpace(departureIcao)) query.Add("departure=" + Uri.EscapeDataString(departureIcao.Trim().ToUpper()));
+        if (!string.IsNullOrWhiteSpace(arrivalIcao)) query.Add("arrival=" + Uri.EscapeDataString(arrivalIcao.Trim().ToUpper()));
+        if (!string.IsNullOrWhiteSpace(routeWaypoint)) query.Add("route=" + Uri.EscapeDataString(routeWaypoint.Trim().ToUpper()));
+
+        if (query.Count == 0)
+        {
+            throw new ArgumentException("At least one of departure, arrival, or route waypoint must be provided.");
+        }
+
+        query.Add("limit=" + limit);
+
+        var cacheKey = $"CskoSearch:{string.Join('&', query)}";
+        if (cache.TryGetValue<List<FlightPlanSearchResult>>(cacheKey, out var cached))
+        {
+            return cached!;
+        }
+
+        var url = MakeSearchUrl(string.Join('&', query));
+        try
+        {
+            var client = httpClientFactory.CreateClient();
+            using var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                logger.LogError("Route Service search returned {status} for {url}: {body}",
+                    (int)response.StatusCode, url, errorBody);
+                response.EnsureSuccessStatusCode(); // throws HttpRequestException
+            }
+
+            var results = await response.Content.ReadFromJsonAsync<List<FlightPlanSearchResult>>() ?? new List<FlightPlanSearchResult>();
+
+            var expiration = DateTimeOffset.UtcNow.AddSeconds(appSettings.CurrentValue.CacheTtls.FlightAwareRoutes);
+            cache.Set(cacheKey, results, expiration);
+
+            return results;
+        }
+        catch (HttpRequestException e)
+        {
+            logger.LogError("Error fetching Route Service search url {url}: {error}", url, e);
+            throw;
+        }
+    }
+
+    // The search endpoint lives at <base>/search. CskoRouteBase is configured with a
+    // trailing '?' for direct query-string concatenation, so strip it before
+    // appending the path segment.
+    private string MakeSearchUrl(string queryString) =>
+        appSettings.CurrentValue.Urls.CskoRouteBase.TrimEnd('?', '&') + "/search?" + queryString;
+
     // Cache key includes the lookback so results for different windows don't collide
     private static (string, string, double) MakeCacheKey(string departureIcao, string arrivalIcao, TimeSpan lookback) => (
         $"CskoDeparture:{departureIcao.ToUpper()}", $"CskoArrival:{arrivalIcao.ToUpper()}", lookback.TotalDays);
@@ -129,6 +188,33 @@ public class FlightRoutesRoot
     [JsonPropertyName("adapted_routes")] public List<AdaptedRoute> AdaptedRoutes { get; set; }
 
     [JsonPropertyName("most_recent")] public List<MostRecent> MostRecent { get; set; }
+}
+
+public class FlightPlanSearchResult
+{
+    [JsonPropertyName("aircraft_id")] public string AircraftId { get; set; }
+
+    [JsonPropertyName("departure")] public string Departure { get; set; }
+
+    [JsonPropertyName("arrival")] public string Arrival { get; set; }
+
+    [JsonPropertyName("assigned_altitude")]
+    public int? AssignedAltitude { get; set; }
+
+    [JsonPropertyName("route_text")] public string RouteText { get; set; }
+
+    // Populated when the flight's route was amended after filing; the site's own
+    // UI prefers this over route_text when present, so DisplayRoute mirrors that
+    [JsonPropertyName("last_route_text")] public string LastRouteText { get; set; }
+
+    [JsonPropertyName("aircraft_type")] public string AircraftType { get; set; }
+
+    [JsonPropertyName("registration")] public string Registration { get; set; }
+
+    [JsonPropertyName("timestamp")] public object Timestamp { get; set; }
+
+    [JsonIgnore]
+    public string DisplayRoute => string.IsNullOrWhiteSpace(LastRouteText) ? RouteText : LastRouteText;
 }
 
 public class AdaptedRoute

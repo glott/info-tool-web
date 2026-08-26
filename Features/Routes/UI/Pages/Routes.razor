@@ -37,7 +37,8 @@
          while the right columns keep their min-widths below. */
     .cdr-grid table,
     .loa-grid table,
-    .rw-grid table {
+    .rw-grid table,
+    .adv-grid table {
         width: auto;
         max-width: 100%;
         table-layout: auto;
@@ -50,13 +51,15 @@
        only works if every grid uses identical paddings. */
     .cdr-grid .col-header-content,
     .loa-grid .col-header-content,
-    .rw-grid .col-header-content {
+    .rw-grid .col-header-content,
+    .adv-grid .col-header-content {
         padding-right: 0 !important;
     }
 
     .cdr-grid .col-title,
     .loa-grid .col-title,
-    .rw-grid .col-title {
+    .rw-grid .col-title,
+    .adv-grid .col-title {
         padding-left: 0 !important;
         padding-right: 0 !important;
     }
@@ -64,13 +67,15 @@
     /* Tighten vertical padding and manage column bounds cleanly */
     .cdr-grid tr,
     .loa-grid tr,
-    .rw-grid tr {
+    .rw-grid tr,
+    .adv-grid tr {
         height: auto !important;
     }
 
     .cdr-grid td, .cdr-grid th,
     .loa-grid td, .loa-grid th,
-    .rw-grid td, .rw-grid th {
+    .rw-grid td, .rw-grid th,
+    .adv-grid td, .adv-grid th {
         padding-top: 0.25rem !important;
         padding-bottom: 0.25rem !important;
         padding-left: 0.4rem !important;
@@ -106,6 +111,14 @@
     .rw-grid .rw-flights .rw-col-callsign { width: 5.5rem; }
     .rw-grid .rw-flights .rw-col-type { width: 4rem; }
     .rw-grid .rw-flights .rw-col-route { width: calc(120ch + 3rem + 4rem); }
+    /* Advanced lookup: callsign 5.5 + type 4 + from 4 + to 4 = 17.5rem of left
+       columns, 4rem over the 13.5rem budget, so Route gives that back to keep
+       the Altitude column aligned with CoordReq/Notes/Altitude above */
+    .adv-grid .adv-col-callsign { width: 5.5rem; }
+    .adv-grid .adv-col-type { width: 4rem; }
+    .adv-grid .adv-col-from { width: 4rem; }
+    .adv-grid .adv-col-to { width: 4rem; }
+    .adv-grid .adv-col-route { width: calc(120ch + 3rem - 4rem); }
 
     /* Keep the short values on one line so they can't be wrapped into slivers */
     .cdr-grid .cdr-col-code,
@@ -113,7 +126,11 @@
     .cdr-grid .cdr-col-coord,
     .rw-grid .rw-col-freq,
     .rw-grid .rw-col-callsign,
-    .rw-grid .rw-col-type {
+    .rw-grid .rw-col-type,
+    .adv-grid .adv-col-callsign,
+    .adv-grid .adv-col-type,
+    .adv-grid .adv-col-from,
+    .adv-grid .adv-col-to {
         white-space: nowrap;
     }
 
@@ -133,6 +150,7 @@
     .cdr-grid .cdr-col-coord,
     .loa-grid .loa-col-notes,
     .rw-col-alt,
+    .adv-col-alt,
     .cdr-grid td:last-child,
     .cdr-grid th:last-child,
     .loa-grid td:last-child,
@@ -171,7 +189,8 @@
        width!) so the cell's minimum size stays small and the table can shrink. */
     .cdr-grid td.cdr-col-route span,
     .loa-grid td.loa-col-route span,
-    .rw-grid td.rw-col-route span {
+    .rw-grid td.rw-col-route span,
+    .adv-grid td.adv-col-route span {
         max-width: 120ch;
     }
 
@@ -180,17 +199,33 @@
        strength when hovering the button itself. Never fully opacity:0 -- it
        stays discoverable, and touch devices (no hover) can still see and tap
        it. Focus-visible keeps it usable by keyboard. */
-    .loa-move-btn {
+    .loa-move-btn,
+    .adv-open-btn,
+    .adv-close-btn {
         opacity: 0.15;
         transition: opacity 150ms;
     }
 
+    /* The site's fixed top nav covers content scrolled flush to the viewport top,
+       so give the scroll target a margin: scrollIntoView stops this far short of
+       the top, leaving the section header visible below the nav. Tune the value
+       if the nav height changes (nav is ~60px; the rest is breathing room). */
+    #advanced-route-lookup {
+        scroll-margin-top: 5.5rem;
+    }
+
     .loa-grid:hover .loa-move-btn,
-    .loa-move-btn:focus-visible {
+    .rw-grid:hover .adv-open-btn,
+    .adv-grid:hover .adv-close-btn,
+    .loa-move-btn:focus-visible,
+    .adv-open-btn:focus-visible,
+    .adv-close-btn:focus-visible {
         opacity: 0.6;
     }
 
-    .loa-move-btn:hover {
+    .loa-move-btn:hover,
+    .adv-open-btn:hover,
+    .adv-close-btn:hover {
         opacity: 1;
     }
 
@@ -503,7 +538,20 @@
     @if (_showRwRoutesLoading || _displayedRwRoutes is not null)
     {
         <div class="border border-slate-600 p-2 rw-grid">
-            <h1 class="text-2xl">Real World Routes</h1>
+            <div class="flex items-center justify-between">
+                <h1 class="text-2xl">Real World Routes</h1>
+                @if (!_showAdvancedLookup)
+                {
+                    <button type="button"
+                            @onclick="() => _showAdvancedLookup = true"
+                            title="Open Advanced Route Lookup"
+                            class="adv-open-btn p-1 rounded text-gray-300 hover:text-white hover:bg-slate-700 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                            <path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z"/>
+                        </svg>
+                    </button>
+                }
+            </div>
             @if (_showRwRoutesLoading)
             {
                 <Spinner/>
@@ -608,6 +656,94 @@
             }
         </div>
     }
+
+    @if (_showAdvancedLookup)
+    {
+        <div id="advanced-route-lookup" class="border border-slate-600 p-2 adv-grid">
+            <div class="flex items-center justify-between">
+                <h1 class="text-2xl">Advanced Route Lookup</h1>
+                <button type="button"
+                        @onclick="() => _showAdvancedLookup = false"
+                        title="Hide Advanced Route Lookup"
+                        class="adv-close-btn p-1 rounded text-gray-300 hover:text-white hover:bg-slate-700 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                        <path fill-rule="evenodd" d="M4 10a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H4.75A.75.75 0 0 1 4 10Z" clip-rule="evenodd"/>
+                    </svg>
+                </button>
+            </div>
+            <EditForm Model="@_advForm" OnValidSubmit="@AdvancedSearchSubmit">
+                <InputText @bind-Value="_advForm.Origin" autocomplete="off"
+                           class="uppercase bg-transparent border border-gray-500 focus:outline-none focus:bg-gray-700 p-0.5 mb-2 ml-1 w-40"
+                           placeholder="Origin"/>
+                <InputText @bind-Value="_advForm.Destination" autocomplete="off"
+                           class="uppercase bg-transparent border border-gray-500 focus:outline-none focus:bg-gray-700 p-0.5 mb-2 ml-1 w-40"
+                           placeholder="Destination"/>
+                <InputText @bind-Value="_advForm.Waypoint" autocomplete="off"
+                           class="uppercase bg-transparent border border-gray-500 focus:outline-none focus:bg-gray-700 p-0.5 mb-2 ml-1 w-40"
+                           placeholder="Waypoint"/>
+                <button type="submit" class="rounded bg-orange-900 transition-colors hover:bg-orange-800 p-1 ml-3">
+                    Search Flight Plans
+                </button>
+                @if (_advResults is not null && AdvSliderMax > 5)
+                {
+                    <span class="inline-flex items-center gap-2 ml-4 text-xs select-none align-middle">
+                        <span>Show:</span>
+                        <input type="range" min="5" max="@AdvSliderMax" step="5"
+                               @bind="_advDisplayCount" @bind:event="oninput" @bind:after="OnAdvSliderChanged"
+                               class="w-48 accent-orange-900 cursor-pointer"/>
+                        <span>@AdvDisplayedResults.Count() of @_advResults.Count</span>
+                    </span>
+                }
+            </EditForm>
+
+            @if (_advError is not null)
+            {
+                <p class="text-red-400">@_advError</p>
+            }
+            @if (_advLoading)
+            {
+                <Spinner/>
+            }
+            else if (_advResults is not null)
+            {
+                @if (!_advResults.Any())
+                {
+                    <p>No flight plans found.</p>
+                }
+                else
+                {
+                    <QuickGrid Items="@AdvDisplayedResults.AsQueryable()">
+                        <PropertyColumn Property="@(p => p.AircraftId)" Title="Callsign" Class="adv-col-callsign"/>
+                        <PropertyColumn Property="@(p => p.AircraftType)" Title="Type" Class="adv-col-type"/>
+                        <PropertyColumn Property="@(p => p.Departure)" Title="From" Class="adv-col-from"/>
+                        <PropertyColumn Property="@(p => p.Arrival)" Title="To" Class="adv-col-to"/>
+                        <TemplateColumn Title="Route" Class="adv-col-route">
+                            @{
+                                var formattedRoute = FormatSearchRoute(context.DisplayRoute, context.Departure, context.Arrival);
+                            }
+                            <div class="flex items-start gap-2">
+                                <button type="button"
+                                        @onclick="@(() => CopyToClipboard(formattedRoute))"
+                                        class="p-1 text-gray-300 hover:text-white bg-slate-700 hover:bg-slate-600 border border-slate-500 rounded transition-colors shrink-0 mt-0.5"
+                                        title="Copy Route">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                    </svg>
+                                </button>
+                                <span>@formattedRoute</span>
+                            </div>
+                        </TemplateColumn>
+                        @if (_advResults.Any(f => f.AssignedAltitude is not null))
+                        {
+                            <TemplateColumn Title="Altitude" Class="adv-col-alt">
+                                <span>@ToFlightLevel(context.AssignedAltitude)</span>
+                            </TemplateColumn>
+                        }
+                    </QuickGrid>
+                }
+            }
+        </div>
+    }
 </div>
 
 @code {
@@ -626,6 +762,148 @@
     private bool _isRwRoutesError;
     private bool _showIndividualFlights = false;
     private bool _showInfrequentRoutes = false;
+
+    // Advanced Route Lookup state
+    private bool _showAdvancedLookup = false;
+    private bool _advLoading = false;
+    private string? _advError;
+    private List<FlightPlanSearchResult>? _advResults;
+    private readonly AdvancedLookupForm _advForm = new();
+
+    // Display-count slider: client-side limit on how many of the fetched results
+    // are shown (the query itself always uses the service's default limit)
+    private int _advDisplayCount = 5;
+
+    private int AdvSliderMax => Math.Min(_advResults?.Count ?? 0, 100);
+
+    private IEnumerable<FlightPlanSearchResult> AdvDisplayedResults =>
+        _advResults?.Take(Math.Max(_advDisplayCount, 5)) ?? Enumerable.Empty<FlightPlanSearchResult>();
+
+    // Turns a raw FAA route string like
+    //   "KMIA.NNOCE2.URSUS.UL780.TORIL.UL780.TRU.UV1.ATATU.ATATU4.SPJC/0955"
+    // into "NNOCE2 URSUS UL780 TORIL UL780 TRU UV1 ATATU ATATU4":
+    // dot runs (".", "..") become single spaces, the leading origin and trailing
+    // destination tokens are stripped, and any "/HHMM" ETE suffix is dropped.
+    // Used for both display and copy so they always match.
+    private static string FormatSearchRoute(string route, string? orig, string? dest)
+    {
+        if (string.IsNullOrWhiteSpace(route)) return string.Empty;
+
+        var cleaned = Regex.Replace(route, @"\.+", " ").Trim();
+        var tokens = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+        if (tokens.Count > 0 && !string.IsNullOrWhiteSpace(orig)
+                             && tokens[0].Equals(orig, StringComparison.OrdinalIgnoreCase))
+        {
+            tokens.RemoveAt(0);
+        }
+
+        // Some filings carry a stray "/" element after the origin (e.g.
+        // "KSFO./.ZEUSS.VIICE2..."), which would otherwise format as
+        // "/ ZEUSS VIICE2" -- drop slash-only tokens and leading slashes
+        while (tokens.Count > 0 && tokens[0].TrimStart('/').Length == 0)
+        {
+            tokens.RemoveAt(0);
+        }
+        if (tokens.Count > 0 && tokens[0].StartsWith('/'))
+        {
+            tokens[0] = tokens[0].TrimStart('/');
+        }
+
+        if (tokens.Count > 0)
+        {
+            var last = tokens[^1];
+            var slashIdx = last.IndexOf('/');
+            var lastBase = slashIdx >= 0 ? last[..slashIdx] : last;
+
+            if (!string.IsNullOrWhiteSpace(dest) && lastBase.Equals(dest, StringComparison.OrdinalIgnoreCase))
+            {
+                tokens.RemoveAt(tokens.Count - 1);
+            }
+            else if (slashIdx >= 0)
+            {
+                // Not the destination, but still carries a "/HHMM" suffix -- drop it
+                tokens[^1] = lastBase;
+            }
+        }
+
+        return string.Join(' ', tokens);
+    }
+
+    private class AdvancedLookupForm
+    {
+        public string Origin { get; set; } = "";
+        public string Destination { get; set; } = "";
+        public string Waypoint { get; set; } = "";
+    }
+
+    private async Task AdvancedSearchSubmit()
+    {
+        // Local IDs (SFO) are normalized to ICAO (KSFO); the search API only
+        // matches on ICAO identifiers
+        var dep = NormalizeAirportCode(_advForm.Origin);
+        var arr = NormalizeAirportCode(_advForm.Destination);
+        var wpt = _advForm.Waypoint.Trim().ToUpper();
+
+        if (string.IsNullOrWhiteSpace(dep) && string.IsNullOrWhiteSpace(arr) && string.IsNullOrWhiteSpace(wpt))
+        {
+            _advResults = null;
+            _advError = "Enter an origin, destination, and/or waypoint.";
+            return;
+        }
+
+        _advError = null;
+        _advLoading = true;
+        try
+        {
+            _advResults = await CskoRouteService.SearchFlightPlansAsync(
+                string.IsNullOrWhiteSpace(dep) ? null : dep,
+                string.IsNullOrWhiteSpace(arr) ? null : arr,
+                string.IsNullOrWhiteSpace(wpt) ? null : wpt);
+
+            // Slider starts fully open (all results, capped at 100); the user can
+            // then drag it down to trim the list
+            _advDisplayCount = Math.Max(AdvSliderMax, 5);
+
+            // Don't scroll here: the results haven't rendered yet, so the page may
+            // not be tall enough for the section to reach the top. OnAfterRenderAsync
+            // performs the scroll once the new rows are in the DOM.
+            _advScrollPending = true;
+        }
+        catch (Exception)
+        {
+            _advResults = null;
+            _advError = "Error searching flight plans.";
+        }
+
+        _advLoading = false;
+    }
+
+    private async Task OnAdvSliderChanged()
+    {
+        // Route through the same post-render scroll as search results, since
+        // moving the slider also changes the section's height before the DOM updates
+        _advScrollPending = true;
+        await Task.CompletedTask;
+    }
+
+    private bool _advScrollPending;
+
+    // Pins the Advanced Route Lookup section to the top of the viewport. Invoked
+    // via window.eval so no site-wide script changes are needed; scrolling is
+    // cosmetic, so any JS failure (e.g. a strict CSP blocking eval) is swallowed.
+    private async Task ScrollAdvancedIntoViewAsync()
+    {
+        try
+        {
+            await Js.InvokeVoidAsync("eval",
+                "document.getElementById('advanced-route-lookup')?.scrollIntoView({behavior:'smooth',block:'start'})");
+        }
+        catch
+        {
+            // non-critical
+        }
+    }
 
     private IEnumerable<FlightRouteSummary> GetFilteredRwRoutes()
     {
@@ -779,6 +1057,15 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // Deferred scroll for the Advanced Route Lookup section: requested by an
+        // event handler, executed here so the newly rendered rows are already in
+        // the DOM and the page is tall enough to scroll the section to the top
+        if (_advScrollPending)
+        {
+            _advScrollPending = false;
+            await ScrollAdvancedIntoViewAsync();
+        }
+
         if (firstRender)
         {
             _storage = await Js.InvokeAsync<IJSObjectReference>("import", "./scripts/storage.js");
