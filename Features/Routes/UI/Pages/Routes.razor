@@ -175,6 +175,25 @@
         max-width: 120ch;
     }
 
+    /* Section-move control in the LOA header: a ghost icon instead of a labeled
+       button. Faint until the pointer is anywhere over the LOA panel, full
+       strength when hovering the button itself. Never fully opacity:0 -- it
+       stays discoverable, and touch devices (no hover) can still see and tap
+       it. Focus-visible keeps it usable by keyboard. */
+    .loa-move-btn {
+        opacity: 0.15;
+        transition: opacity 150ms;
+    }
+
+    .loa-grid:hover .loa-move-btn,
+    .loa-move-btn:focus-visible {
+        opacity: 0.6;
+    }
+
+    .loa-move-btn:hover {
+        opacity: 1;
+    }
+
     /* TEC/AAR/ADR: subtle separator line + symmetric padding between rows so
        multi-option blocks read as distinct sections */
     .tec-grid table > tbody > tr > td {
@@ -326,7 +345,28 @@
         @* Parent is flex-col: order 1 pushes this section visually after Real World
            Routes (all other sections keep default order 0) without duplicating markup *@
         <div class="border border-slate-600 p-2 loa-grid @(_displayedLoaRules.Any(r => !r.IsRnavRequired) ? "loa-has-rnav" : null)" style="@(_loaAfterRwRoutes ? "order: 1" : null)">
-            <h1 class="text-2xl">LOA Routes</h1>
+            <div class="flex items-center justify-between">
+                <h1 class="text-2xl">LOA Routes</h1>
+                @* Section move control, demoted to a ghost icon: nearly invisible
+                   until the LOA panel is hovered, but always present (and therefore
+                   still tappable on touch devices). Arrow points where the section
+                   will GO: down when it's up top, up when it's been moved lower. *@
+                <button type="button"
+                        @onclick="ToggleLoaPosition"
+                        class="loa-move-btn p-1 rounded text-gray-300 hover:text-white hover:bg-slate-700 transition-colors"
+                        title="@(_loaAfterRwRoutes ? "Move this section back above Real World Routes" : "Move this section below Real World Routes")">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                        @if (_loaAfterRwRoutes)
+                        {
+                            <path fill-rule="evenodd" d="M9.47 6.47a.75.75 0 011.06 0l4.25 4.25a.75.75 0 11-1.06 1.06L10 8.06l-3.72 3.72a.75.75 0 01-1.06-1.06l4.25-4.25z" clip-rule="evenodd"/>
+                        }
+                        else
+                        {
+                            <path fill-rule="evenodd" d="M10.53 13.53a.75.75 0 01-1.06 0L5.22 9.28a.75.75 0 011.06-1.06L10 11.94l3.72-3.72a.75.75 0 111.06 1.06l-4.25 4.25z" clip-rule="evenodd"/>
+                        }
+                    </svg>
+                </button>
+            </div>
             <QuickGrid Items="@_displayedLoaRules.AsQueryable()">
                 <TemplateColumn Title="Route" Class="loa-col-route">
                     <div class="flex items-start gap-2">
@@ -359,14 +399,6 @@
                 }
                 <PropertyColumn Property="@(p => p.Notes)" Class="loa-col-notes"/>
             </QuickGrid>
-
-            <div class="toggle-btn-row">
-                <button type="button"
-                        @onclick="ToggleLoaPosition"
-                        class="rounded bg-slate-700 hover:bg-slate-600 transition-colors p-1.5 text-xs">
-                    @(_loaAfterRwRoutes ? "Show Section Higher" : "Show Section Lower")
-                </button>
-            </div>
         </div>
     }
 
