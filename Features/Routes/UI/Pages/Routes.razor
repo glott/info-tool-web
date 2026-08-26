@@ -863,7 +863,7 @@
             _showRwRoutesLoading = true;
             try
             {
-                _displayedRwRoutes = await CskoRouteService.FetchRoutesAsync(departureIcao, arrivalIcao);
+                _displayedRwRoutes = await CskoRouteService.FetchRoutesAsync(departureIcao, arrivalIcao, RwRouteLookback);
                 _isRwRoutesError = false;
             }
             catch (Exception)
@@ -1195,4 +1195,7 @@
     private const string ShowCdrsStorageKey = "ShowCdrs";
 
     private const string LoaAfterRwRoutesStorageKey = "LoaAfterRwRoutes";
+
+    // How far back Real World Routes data is pulled (~6 months)
+    private static readonly TimeSpan RwRouteLookback = TimeSpan.FromDays(183);
 }

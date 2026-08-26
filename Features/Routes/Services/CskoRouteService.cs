@@ -11,18 +11,36 @@ public class CskoRouteService(
     IMemoryCache cache,
     ILogger<CskoRouteService> logger)
 {
-    public async Task<AirportPairRouteSummary> FetchRoutesAsync(string departureIcao, string arrivalIcao)
+    /// <summary>
+    /// Fetches real-world routes filed between <paramref name="lookback"/> ago and now.
+    /// Callers must specify the window, e.g. TimeSpan.FromDays(183) for ~6 months.
+    /// </summary>
+    public async Task<AirportPairRouteSummary> FetchRoutesAsync(string departureIcao, string arrivalIcao,
+        TimeSpan lookback)
     {
-        if (cache.TryGetValue<AirportPairRouteSummary>(MakeCacheKey(departureIcao, arrivalIcao), out var routeSummary))
+        if (cache.TryGetValue<AirportPairRouteSummary>(MakeCacheKey(departureIcao, arrivalIcao, lookback), out var routeSummary))
         {
             return routeSummary!;
         }
 
-        var url = MakeUrl(departureIcao, arrivalIcao);
+        var url = MakeUrl(departureIcao, arrivalIcao, lookback);
         try
         {
             var client = httpClientFactory.CreateClient();
-            var routes = await client.GetFromJsonAsync<FlightRoutesRoot>(url);
+
+            // Fetch manually (rather than GetFromJsonAsync) so a non-success
+            // response's body can be logged -- APIs like this one usually explain
+            // *why* a request was rejected (e.g. expected format for "since")
+            using var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorBody = await response.Content.ReadAsStringAsync();
+                logger.LogError("Route Service returned {status} for {url}: {body}",
+                    (int)response.StatusCode, url, errorBody);
+                response.EnsureSuccessStatusCode(); // throws HttpRequestException
+            }
+
+            var routes = await response.Content.ReadFromJsonAsync<FlightRoutesRoot>();
             var returnRouteSummary = new AirportPairRouteSummary(departureIcao, arrivalIcao);
             var routesDict = new Dictionary<string, FlightRouteSummary>();
 
@@ -70,9 +88,11 @@ public class CskoRouteService(
                 }
             }
 
-            // Cache result before returning
+            // Cache result before returning. Cache the mapped summary (not the raw
+            // FlightRoutesRoot): the lookup above reads AirportPairRouteSummary, and
+            // a type mismatch would make TryGetValue miss on every request.
             var expiration = DateTimeOffset.UtcNow.AddSeconds(appSettings.CurrentValue.CacheTtls.FlightAwareRoutes);
-            cache.Set(MakeCacheKey(departureIcao, arrivalIcao), routes, expiration);
+            cache.Set(MakeCacheKey(departureIcao, arrivalIcao, lookback), returnRouteSummary, expiration);
 
             return returnRouteSummary;
         }
@@ -83,16 +103,23 @@ public class CskoRouteService(
         }
     }
 
-    private string MakeUrl(string departureIcao, string arrivalIcao) => appSettings.CurrentValue.Urls.CskoRouteBase +
-                                                                        "departure=" + departureIcao + "&arrival=" +
-                                                                        arrivalIcao + "&since" +
-                                                                        DaysAgoTimestamp(31);
+    // Note: the original URL was missing the '=' after "since" ("&since<timestamp>"),
+    // so the API ignored the malformed parameter and returned all-time data.
+    private string MakeUrl(string departureIcao, string arrivalIcao, TimeSpan lookback) =>
+        appSettings.CurrentValue.Urls.CskoRouteBase +
+        "departure=" + departureIcao + "&arrival=" + arrivalIcao +
+        "&since=" + SinceTimestamp(lookback);
 
-    private static (string, string) MakeCacheKey(string departureIcao, string arrivalIcao) => (
-        $"CskoDeparture:{departureIcao.ToUpper()}", $"CskoArrival:{arrivalIcao.ToUpper()}");
+    // Cache key includes the lookback so results for different windows don't collide
+    private static (string, string, double) MakeCacheKey(string departureIcao, string arrivalIcao, TimeSpan lookback) => (
+        $"CskoDeparture:{departureIcao.ToUpper()}", $"CskoArrival:{arrivalIcao.ToUpper()}", lookback.TotalDays);
 
-    private static string DaysAgoTimestamp(int days) =>
-        DateTimeOffset.UtcNow.AddDays(-1 * days).ToUnixTimeMilliseconds().ToString();
+    // Unix epoch SECONDS. Date strings ("2026-02-24") are rejected with 400, and
+    // epoch milliseconds likely overflow a 32-bit parse; seconds fit. If the API
+    // still rejects this, the logged response body in FetchRoutesAsync will show
+    // the format it expects.
+    private static string SinceTimestamp(TimeSpan lookback) =>
+        DateTimeOffset.UtcNow.Subtract(lookback).ToUnixTimeSeconds().ToString();
 }
 
 public class FlightRoutesRoot
